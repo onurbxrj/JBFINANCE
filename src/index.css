@@ -59,56 +59,61 @@
   --color-sidebar-ring: var(--sidebar-ring);
 
   /* Custom premium colors */
-  --color-success: #22C55E;
-  --color-danger: #EF4444;
-  --color-warning: #F59E0B;
+  --color-success: var(--success);
+  --color-danger: var(--destructive);
+  --color-warning: var(--warning);
 }
 
 :root {
-  --radius: 0.625rem;
+  --radius: 0.5rem;
 
-  /* Premium Soft Dark Theme - Stripe/Linear inspired */
-  --background: #0F172A;
-  --foreground: #E2E8F0;
+  /* Ultra-Premium Obsidian Theme - Linear/Vercel inspired */
+  --background: #000000;
+  --foreground: #EDEDED;
 
-  --card: #1E293B;
-  --card-foreground: #E2E8F0;
+  --card: #0A0A0A;
+  --card-foreground: #EDEDED;
 
-  --popover: #1E293B;
-  --popover-foreground: #E2E8F0;
+  --popover: #0A0A0A;
+  --popover-foreground: #EDEDED;
 
-  --primary: #3B82F6;
-  --primary-foreground: #FFFFFF;
+  /* Sofisticação Monocromática */
+  --primary: #EDEDED;
+  --primary-foreground: #000000;
 
-  --secondary: #111827;
-  --secondary-foreground: #E2E8F0;
+  --secondary: #171717;
+  --secondary-foreground: #EDEDED;
 
-  --muted: #1E293B;
-  --muted-foreground: #94A3B8;
+  --muted: #111111;
+  --muted-foreground: #8B8D98;
 
-  --accent: #1E293B;
-  --accent-foreground: #E2E8F0;
+  --accent: #1A1A1A;
+  --accent-foreground: #EDEDED;
 
-  --destructive: #EF4444;
+  /* Redução de Fadiga Visual (Sutis) */
+  --destructive: #E5484D;
+  --success: #17B85E;
+  --warning: #F5A623;
 
-  --border: rgba(148, 163, 184, 0.12);
-  --input: rgba(148, 163, 184, 0.15);
-  --ring: #3B82F6;
+  --border: rgba(255, 255, 255, 0.08);
+  /* Minimal border */
+  --input: rgba(255, 255, 255, 0.04);
+  --ring: rgba(255, 255, 255, 0.2);
 
-  --chart-1: #3B82F6;
-  --chart-2: #22C55E;
-  --chart-3: #F59E0B;
-  --chart-4: #8B5CF6;
-  --chart-5: #EF4444;
+  --chart-1: #EDEDED;
+  --chart-2: #17B85E;
+  --chart-3: #F5A623;
+  --chart-4: #5E6AD2;
+  --chart-5: #E5484D;
 
-  --sidebar: #111827;
-  --sidebar-foreground: #E2E8F0;
-  --sidebar-primary: #3B82F6;
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: rgba(59, 130, 246, 0.1);
-  --sidebar-accent-foreground: #3B82F6;
-  --sidebar-border: rgba(148, 163, 184, 0.08);
-  --sidebar-ring: #3B82F6;
+  --sidebar: #050505;
+  --sidebar-foreground: #EDEDED;
+  --sidebar-primary: #EDEDED;
+  --sidebar-primary-foreground: #000000;
+  --sidebar-accent: #171717;
+  --sidebar-accent-foreground: #EDEDED;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: rgba(255, 255, 255, 0.3);
 }
 
 /* Scrollbar styling */
@@ -145,8 +150,15 @@
 
 /* Animated gradient background for premium elements */
 @keyframes gradient-shift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
+
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
 }
 
 .gradient-animate {
@@ -154,18 +166,100 @@
   animation: gradient-shift 8s ease infinite;
 }
 
-/* Glassmorphism card effect */
+/* Ultra-Premium Glassmorphism & Inner Depth (Linear Vibe) */
 .glass-card {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(10, 10, 10, 0.6);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+}
+
+.inner-border {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+  /* Top highlight */
+}
+
+/* Subtle Glowing effect for Highlights */
+.premium-glow {
+  position: relative;
+}
+
+.premium-glow::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 120%;
+  height: 120%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.03) 0%, transparent 70%);
+  z-index: -1;
+  pointer-events: none;
 }
 
 /* Pulse animation for live indicators */
 @keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
 }
 
 .pulse-dot {
   animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Neon Gradients for Ultra Premium Look */
+.text-gradient-neon {
+  background: linear-gradient(135deg, #7C3AED 0%, #06B6D4 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.bg-gradient-neon {
+  background: linear-gradient(135deg, #7C3AED 0%, #06B6D4 100%);
+}
+
+.text-gradient-magenta {
+  background: linear-gradient(135deg, #DB2777 0%, #7C3AED 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Micro-Pill Badges (Ultra Dense) */
+.badge-glass-success {
+  background: rgba(23, 184, 94, 0.15);
+  color: #17B85E;
+  border: 1px solid rgba(23, 184, 94, 0.25);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.badge-glass-danger {
+  background: rgba(229, 72, 77, 0.15);
+  color: #E5484D;
+  border: 1px solid rgba(229, 72, 77, 0.25);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }

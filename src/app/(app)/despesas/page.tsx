@@ -41,7 +41,7 @@ export default function DespesasPage() {
     const [isOpen, setIsOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
-    const { role } = useAuth();
+    const { role, userId } = useAuth();
 
     // Search & Pagination
     const [search, setSearch] = useState('');
@@ -120,7 +120,7 @@ export default function DespesasPage() {
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
-        if (!centroCusto || !planoContas || !categoria || !descricao || !valor) {
+        if ((tipoRateio === "nenhum" && !centroCusto) || !planoContas || !categoria || !descricao || !valor) {
             alert("Preencha todos os campos obrigatórios.");
             return;
         }
@@ -136,6 +136,7 @@ export default function DespesasPage() {
                 observacao,
                 valor: parseFloat(valor),
                 tipo_rateio: tipoRateio,
+                created_by: userId || undefined,
             };
 
             let despesaId = editingId;
@@ -497,6 +498,7 @@ export default function DespesasPage() {
                                         <TableRow className="bg-muted/30 hover:bg-muted/30">
                                             <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Data</TableHead>
                                             <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">C.Custo</TableHead>
+                                            <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">P.Contas</TableHead>
                                             <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Categoria</TableHead>
                                             <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Descrição</TableHead>
                                             <TableHead className="text-right text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Valor</TableHead>
@@ -512,6 +514,7 @@ export default function DespesasPage() {
                                                     {format(new Date(d.data), "dd/MM/yyyy", { locale: ptBR })}
                                                 </TableCell>
                                                 <TableCell className="text-[13px] text-muted-foreground">{d.centro_custo}</TableCell>
+                                                <TableCell className="text-[13px] text-muted-foreground">{d.plano_contas}</TableCell>
                                                 <TableCell className="text-[13px] text-muted-foreground">{d.categoria}</TableCell>
                                                 <TableCell className="text-[13px] text-muted-foreground max-w-[200px] truncate">{d.descricao}</TableCell>
                                                 <TableCell className="text-right font-semibold text-[13px] text-danger financial-value">

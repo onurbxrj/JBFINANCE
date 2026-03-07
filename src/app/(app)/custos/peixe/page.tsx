@@ -35,7 +35,7 @@ export default function CustosPeixePage() {
     const [isPeixeOpen, setIsPeixeOpen] = useState(false);
     const [isPeixeSubmitting, setIsPeixeSubmitting] = useState(false);
     const [editingPeixeId, setEditingPeixeId] = useState<string | null>(null);
-    const { role } = useAuth();
+    const { role, userId } = useAuth();
 
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(1);
@@ -76,6 +76,7 @@ export default function CustosPeixePage() {
                 custo_total: qtd * unit,
                 valor_venda: parseFloat(peixeValorVenda || "0"),
                 observacao: peixeObservacao,
+                created_by: userId || undefined,
             };
 
             if (editingPeixeId) {

@@ -43,6 +43,10 @@ export default function DrePage() {
         let totalCustos = 0, custosAcougue = 0, custosPeixariaVal = 0;
         let totalDespesas = 0, despesasAcougue = 0, despesasPeixariaVal = 0;
 
+        const despesasLojaPorPlano: Record<string, number> = {};
+        const despesasAcouguePorPlano: Record<string, number> = {};
+        const despesasPeixariaPorPlano: Record<string, number> = {};
+
         receitas.forEach(r => {
             totalReceitas += r.valor;
             if (r.setor === 'ACOUQUE') receitasAcougue += r.valor;
@@ -63,16 +67,37 @@ export default function DrePage() {
 
         despesas.forEach(dp => {
             totalDespesas += dp.valor;
+            const plano = dp.plano_contas || 'Sem Plano';
+            despesasLojaPorPlano[plano] = (despesasLojaPorPlano[plano] || 0) + dp.valor;
+
             if (dp.tipo_rateio === 'nenhum' || !dp.tipo_rateio) {
-                if (dp.centro_custo === 'Açougue') despesasAcougue += dp.valor;
-                if (dp.centro_custo === 'Peixaria') despesasPeixariaVal += dp.valor;
-            } else {
+                if (dp.centro_custo === 'Açougue') {
+                    despesasAcougue += dp.valor;
+                    despesasAcouguePorPlano[plano] = (despesasAcouguePorPlano[plano] || 0) + dp.valor;
+                }
+                if (dp.centro_custo === 'Peixaria') {
+                    despesasPeixariaVal += dp.valor;
+                    despesasPeixariaPorPlano[plano] = (despesasPeixariaPorPlano[plano] || 0) + dp.valor;
+                }
+            } else if (dp.tipo_rateio === 'igual') {
+                const perc = dp.valor / 2;
+                despesasAcougue += perc;
+                despesasPeixariaVal += perc;
+                despesasAcouguePorPlano[plano] = (despesasAcouguePorPlano[plano] || 0) + perc;
+                despesasPeixariaPorPlano[plano] = (despesasPeixariaPorPlano[plano] || 0) + perc;
+            } else if (dp.tipo_rateio === 'percentual') {
                 const myRateios = rateios.filter(rt => rt.despesa_id === dp.id);
                 if (myRateios.length > 0) {
-                    const percAcougue = myRateios.find(rt => rt.setor === 'Açougue')?.percentual || 0;
-                    const percPeixaria = myRateios.find(rt => rt.setor === 'Peixaria')?.percentual || 0;
-                    despesasAcougue += (dp.valor * percAcougue) / 100;
-                    despesasPeixariaVal += (dp.valor * percPeixaria) / 100;
+                    const percRealAcougue = myRateios.find(rt => rt.setor === 'Açougue')?.percentual || 0;
+                    const percRealPeixaria = myRateios.find(rt => rt.setor === 'Peixaria')?.percentual || 0;
+
+                    const valAcougue = (dp.valor * percRealAcougue) / 100;
+                    const valPeixaria = (dp.valor * percRealPeixaria) / 100;
+
+                    despesasAcougue += valAcougue;
+                    despesasPeixariaVal += valPeixaria;
+                    despesasAcouguePorPlano[plano] = (despesasAcouguePorPlano[plano] || 0) + valAcougue;
+                    despesasPeixariaPorPlano[plano] = (despesasPeixariaPorPlano[plano] || 0) + valPeixaria;
                 }
             }
         });
@@ -85,6 +110,7 @@ export default function DrePage() {
             totalReceitas, receitasAcougue, receitasPeixaria,
             totalCustos, custosAcougue, custosPeixaria: custosPeixariaVal,
             totalDespesas, despesasAcougue, despesasPeixaria: despesasPeixariaVal,
+            despesasLojaPorPlano, despesasAcouguePorPlano, despesasPeixariaPorPlano,
             resultadoLoja, resultadoAcougue, resultadoPeixaria,
             margem: totalReceitas > 0 ? (resultadoLoja / totalReceitas) * 100 : 0,
             margemAcougue: receitasAcougue > 0 ? (resultadoAcougue / receitasAcougue) * 100 : 0,
@@ -94,12 +120,12 @@ export default function DrePage() {
 
     const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
-    const DreTable = ({ title, receita, custos, despesas, resultado, margem }: {
-        title: string; receita: number; custos: number; despesas: number; resultado: number; margem: number;
+    const DreTable = ({ title, receita, custos, despesas, resultado, margem, despesasAnaliticas, showCustosAsPescado }: {
+        title: string; receita: number; custos: number; despesas: number; resultado: number; margem: number; despesasAnaliticas?: Record<string, number>; showCustosAsPescado?: boolean;
     }) => (
-        <Card className="overflow-hidden">
+        <Card className="glass-card inner-border overflow-hidden">
             <CardHeader className="bg-primary/5 pb-3">
-                <CardTitle className="text-[15px] flex items-center gap-2">
+                <CardTitle className="text-sm font-semibold tracking-tight flex items-center gap-2">
                     <BarChart3 className="w-4 h-4 text-primary" />
                     {title}
                 </CardTitle>
@@ -107,29 +133,41 @@ export default function DrePage() {
             <CardContent className="p-0">
                 <div className="divide-y divide-border">
                     <div className="p-4 px-6 flex justify-between items-center hover:bg-muted/20 transition-colors">
-                        <span className="font-medium text-foreground text-[14px]">1. Receita Bruta</span>
+                        <span className="font-semibold text-foreground text-sm tracking-tight">1. Receita Bruta</span>
                         <span className="font-bold text-success financial-value">{formatCurrency(receita)}</span>
                     </div>
-                    <div className="p-4 px-6 pl-10 flex justify-between items-center text-[13px] text-muted-foreground hover:bg-muted/20 transition-colors">
+                    <div className="p-4 px-6 pl-10 flex justify-between items-center text-sm text-muted-foreground hover:bg-muted/30 transition-colors">
                         <span>(-) Custos Diretos</span>
                         <span className="font-medium text-danger financial-value">{formatCurrency(custos)}</span>
                     </div>
-                    <div className="p-4 px-6 flex justify-between items-center bg-primary/5 font-semibold text-[14px]">
+                    <div className="p-4 px-6 flex justify-between items-center bg-primary/5 font-semibold text-sm tracking-tight">
                         <span className="text-foreground">= Lucro Bruto</span>
                         <span className="text-foreground financial-value">{formatCurrency(receita - custos)}</span>
                     </div>
-                    <div className="p-4 px-6 pl-10 flex justify-between items-center text-[13px] text-muted-foreground hover:bg-muted/20 transition-colors">
-                        <span>(-) Despesas Rateadas / Fixas</span>
-                        <span className="font-medium text-danger financial-value">{formatCurrency(despesas)}</span>
-                    </div>
-                    <div className="p-4 px-6 flex justify-between items-center bg-gradient-to-r from-primary/20 to-primary/5 font-bold text-lg">
+
+                    {despesasAnaliticas ? (
+                        Object.entries(despesasAnaliticas).map(([plano, valor]) => (
+                            <div key={plano} className="p-4 px-6 pl-10 flex justify-between items-center text-[13px] text-muted-foreground hover:bg-muted/20 transition-colors">
+                                <span>(-) {plano}</span>
+                                <span className="font-medium text-danger financial-value">-{formatCurrency(valor)}</span>
+                            </div>
+                        ))
+                    ) : (
+                        <div className="p-4 px-6 pl-10 flex justify-between items-center text-sm text-muted-foreground hover:bg-muted/30 transition-colors">
+                            <span>(-) Despesas Rateadas / Fixas</span>
+                            <span className="font-medium text-danger financial-value">{formatCurrency(despesas)}</span>
+                        </div>
+                    )}
+                    <div className="p-4 px-6 flex justify-between items-center bg-background/20 font-bold text-lg">
                         <span className="text-foreground">= Resultado Operacional</span>
-                        <span className={`financial-value ${resultado >= 0 ? 'text-success' : 'text-danger'}`}>
+                        <span className={`financial-value ${resultado >= 0 ? 'text-gradient-neon text-xl' : 'text-danger text-xl'}`}>
                             {formatCurrency(resultado)}
                         </span>
                     </div>
-                    <div className="p-3 px-6 text-right text-[13px] text-muted-foreground bg-muted/20">
-                        Margem: <span className="font-semibold text-foreground">{margem.toFixed(2)}%</span>
+                    <div className="p-3 px-6 text-right bg-muted/20">
+                        <span className={margem >= 0 ? "badge-glass-success" : "badge-glass-danger"}>
+                            Margem: {margem.toFixed(2)}%
+                        </span>
                     </div>
                 </div>
             </CardContent>
@@ -140,17 +178,23 @@ export default function DrePage() {
         <div className="space-y-8 animate-in fade-in duration-500">
             <div>
                 <h1 className="text-2xl font-bold tracking-tight text-foreground">DRE Gerencial</h1>
-                <p className="text-[13px] text-muted-foreground mt-1">Demonstração do Resultado do Exercício — Consolidado e por Setor</p>
+                <p className="text-sm text-muted-foreground mt-1">Demonstração do Resultado do Exercício — Consolidado e por Setor</p>
             </div>
 
             {isLoading ? (
-                <div className="flex items-center justify-center py-16">
-                    <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                <div className="space-y-6">
+                    <div className="h-4 w-48 bg-muted/20 animate-pulse rounded mb-4" />
+                    <div className="h-[280px] w-full max-w-3xl rounded-xl bg-muted/20 animate-pulse border border-border/50" />
+                    <div className="h-4 w-48 bg-muted/20 animate-pulse rounded mt-8 mb-4" />
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="h-[280px] rounded-xl bg-muted/20 animate-pulse border border-border/50" />
+                        <div className="h-[280px] rounded-xl bg-muted/20 animate-pulse border border-border/50" />
+                    </div>
                 </div>
             ) : (
                 <>
                     <div>
-                        <h2 className="text-[15px] font-semibold text-muted-foreground uppercase tracking-wider mb-4">DRE Consolidado (Loja)</h2>
+                        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">DRE Consolidado (Loja)</h2>
                         <div className="max-w-3xl">
                             <DreTable
                                 title="Resultado Geral da Loja"
@@ -159,12 +203,13 @@ export default function DrePage() {
                                 despesas={dreData.totalDespesas}
                                 resultado={dreData.resultadoLoja}
                                 margem={dreData.margem}
+                                despesasAnaliticas={dreData.despesasLojaPorPlano}
                             />
                         </div>
                     </div>
 
                     <div>
-                        <h2 className="text-[15px] font-semibold text-muted-foreground uppercase tracking-wider mb-4">DRE por Setor</h2>
+                        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">DRE por Setor</h2>
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <DreTable
                                 title="Açougue"
@@ -173,6 +218,7 @@ export default function DrePage() {
                                 despesas={dreData.despesasAcougue}
                                 resultado={dreData.resultadoAcougue}
                                 margem={dreData.margemAcougue}
+                                despesasAnaliticas={dreData.despesasAcouguePorPlano}
                             />
                             <DreTable
                                 title="Peixaria"
@@ -181,14 +227,20 @@ export default function DrePage() {
                                 despesas={dreData.despesasPeixaria}
                                 resultado={dreData.resultadoPeixaria}
                                 margem={dreData.margemPeixaria}
+                                despesasAnaliticas={dreData.despesasPeixariaPorPlano}
                             />
                         </div>
                     </div>
 
                     {dreData.totalReceitas === 0 && dreData.totalDespesas === 0 && dreData.totalCustos === 0 && (
-                        <div className="text-center p-8 bg-muted/30 rounded-2xl border border-dashed border-border">
-                            <p className="text-muted-foreground text-lg font-medium">Nenhum dado lançado ainda</p>
-                            <p className="text-muted-foreground/70 text-sm mt-1">Registre receitas, despesas ou custos para visualizar o relatório DRE completo.</p>
+                        <div className="flex flex-col items-center justify-center py-16 text-center animate-in fade-in duration-500 mt-8 rounded-2xl border border-dashed border-border/50 bg-muted/10">
+                            <div className="bg-muted/10 p-5 rounded-full mb-4 shadow-sm border border-border/50">
+                                <BarChart3 className="w-8 h-8 text-muted-foreground/60" />
+                            </div>
+                            <h3 className="text-lg font-semibold text-foreground mb-2">Sem movimentações</h3>
+                            <p className="text-sm text-muted-foreground max-w-sm mb-6">
+                                Registre receitas, despesas ou custos operacionais para que o relatório DRE possa calcular seu resultado consolidado.
+                            </p>
                         </div>
                     )}
                 </>

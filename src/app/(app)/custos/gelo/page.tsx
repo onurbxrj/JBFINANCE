@@ -34,7 +34,7 @@ export default function CustosGeloPage() {
     const [isGeloOpen, setIsGeloOpen] = useState(false);
     const [isGeloSubmitting, setIsGeloSubmitting] = useState(false);
     const [editingGeloId, setEditingGeloId] = useState<string | null>(null);
-    const { role } = useAuth();
+    const { role, userId } = useAuth();
 
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(1);
@@ -71,6 +71,7 @@ export default function CustosGeloPage() {
                 custo_unitario: unit,
                 custo_total: qtd * unit,
                 valor_venda: parseFloat(geloValorVenda || "0"),
+                created_by: userId || undefined,
             };
 
             if (editingGeloId) {

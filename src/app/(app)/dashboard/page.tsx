@@ -99,6 +99,10 @@ export default function DashboardPage() {
 
         // Receitas by setor
         let receitaAcougue = 0, receitaPeixaria = 0;
+        let despesaAcougue = 0, despesaPeixaria = 0;
+        let custoAcougue = 0, custoPeixaria = 0;
+        const despesasAcouguePorPlano: Record<string, number> = {};
+        const despesasPeixariaPorPlano: Record<string, number> = {};
 
         receitas.forEach(r => {
             const d = new Date(r.data);
@@ -117,6 +121,38 @@ export default function DashboardPage() {
             if (dp.data.startsWith(yesterdayStr)) despesaOntem += dp.valor;
             if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
                 despesaMes += dp.valor;
+
+                // Distribuição por Setor (Rateio vs Direto)
+                const plano = dp.plano_contas || 'Sem Plano';
+                if (dp.tipo_rateio === 'nenhum' || !dp.tipo_rateio) {
+                    if (dp.centro_custo === 'Açougue') {
+                        despesaAcougue += dp.valor;
+                        despesasAcouguePorPlano[plano] = (despesasAcouguePorPlano[plano] || 0) + dp.valor;
+                    }
+                    if (dp.centro_custo === 'Peixaria') {
+                        despesaPeixaria += dp.valor;
+                        despesasPeixariaPorPlano[plano] = (despesasPeixariaPorPlano[plano] || 0) + dp.valor;
+                    }
+                } else if (dp.tipo_rateio === 'igual') {
+                    const half = dp.valor / 2;
+                    despesaAcougue += half;
+                    despesaPeixaria += half;
+                    despesasAcouguePorPlano[plano] = (despesasAcouguePorPlano[plano] || 0) + half;
+                    despesasPeixariaPorPlano[plano] = (despesasPeixariaPorPlano[plano] || 0) + half;
+                } else if (dp.tipo_rateio === 'percentual') {
+                    const despRateios = rateios.filter(r => r.despesa_id === dp.id);
+                    despRateios.forEach(rt => {
+                        const val = (dp.valor * rt.percentual) / 100;
+                        if (rt.setor === 'Açougue') {
+                            despesaAcougue += val;
+                            despesasAcouguePorPlano[plano] = (despesasAcouguePorPlano[plano] || 0) + val;
+                        }
+                        if (rt.setor === 'Peixaria') {
+                            despesaPeixaria += val;
+                            despesasPeixariaPorPlano[plano] = (despesasPeixariaPorPlano[plano] || 0) + val;
+                        }
+                    });
+                }
             }
         });
 
@@ -125,7 +161,10 @@ export default function DashboardPage() {
             const total = c.custo_total || (c.quantidade * c.custo_unitario);
             if (c.data.startsWith(todayStr)) custoHoje += total;
             if (c.data.startsWith(yesterdayStr)) custoOntem += total;
-            if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) custoMes += total;
+            if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
+                custoMes += total;
+                custoPeixaria += total; // Gelo sempre vai para Peixaria neste contexto de custo direto
+            }
         });
 
         custosPeixe.forEach(c => {
@@ -133,7 +172,10 @@ export default function DashboardPage() {
             const total = c.custo_total || (c.quantidade * c.custo_unitario);
             if (c.data.startsWith(todayStr)) custoHoje += total;
             if (c.data.startsWith(yesterdayStr)) custoOntem += total;
-            if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) custoMes += total;
+            if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
+                custoMes += total;
+                custoPeixaria += total; // Peixe também é custo direto da Peixaria
+            }
         });
 
         const despTotalHoje = despesaHoje + custoHoje;
@@ -159,6 +201,12 @@ export default function DashboardPage() {
             despesaVsOntem,
             receitaAcougue,
             receitaPeixaria,
+            despesaAcougue,
+            despesaPeixaria,
+            custoAcougue,
+            custoPeixaria,
+            despesasAcouguePorPlano,
+            despesasPeixariaPorPlano
         };
     }, [receitas, despesas, custosGelo, custosPeixe, rateios]);
 
@@ -209,13 +257,14 @@ export default function DashboardPage() {
 
     // Recent transactions (combined)
     const transactions = useMemo(() => {
-        const all: { id: string; data: string; tipo: 'Receita' | 'Despesa'; categoria: string; setor: string; valor: number }[] = [];
+        const all: { id: string; data: string; tipo: 'Receita' | 'Despesa'; plano_contas: string; categoria: string; setor: string; valor: number }[] = [];
 
         receitas.forEach(r => {
             all.push({
                 id: r.id || '',
                 data: r.data,
                 tipo: 'Receita',
+                plano_contas: r.plano_contas || '',
                 categoria: r.categoria,
                 setor: r.setor === 'ACOUQUE' ? 'Açougue' : 'Peixaria',
                 valor: r.valor,
@@ -227,6 +276,7 @@ export default function DashboardPage() {
                 id: d.id || '',
                 data: d.data,
                 tipo: 'Despesa',
+                plano_contas: d.plano_contas || '',
                 categoria: d.categoria,
                 setor: d.centro_custo,
                 valor: d.valor,
@@ -242,7 +292,8 @@ export default function DashboardPage() {
         return transactions.filter(tx =>
             tx.categoria.toLowerCase().includes(q) ||
             tx.setor.toLowerCase().includes(q) ||
-            tx.tipo.toLowerCase().includes(q)
+            tx.tipo.toLowerCase().includes(q) ||
+            tx.plano_contas.toLowerCase().includes(q)
         );
     }, [transactions, txSearch]);
 
@@ -257,9 +308,27 @@ export default function DashboardPage() {
 
     if (isLoading) {
         return (
-            <div className="h-[60vh] flex flex-col items-center justify-center gap-4">
-                <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                <p className="text-muted-foreground text-sm">Carregando dados financeiros...</p>
+            <div className="space-y-8 animate-in fade-in duration-500">
+                <div>
+                    <div className="h-5 w-32 bg-muted/20 animate-pulse rounded mb-4" />
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {[1, 2, 3].map(i => (
+                            <div key={i} className="h-[120px] rounded-xl bg-muted/20 animate-pulse border border-border/50" />
+                        ))}
+                    </div>
+                </div>
+                <div>
+                    <div className="h-5 w-32 bg-muted/20 animate-pulse rounded mb-4" />
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {[4, 5, 6].map(i => (
+                            <div key={i} className="h-[120px] rounded-xl bg-muted/20 animate-pulse border border-border/50" />
+                        ))}
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="h-[360px] rounded-xl bg-muted/20 animate-pulse border border-border/50" />
+                    <div className="h-[360px] rounded-xl bg-muted/20 animate-pulse border border-border/50" />
+                </div>
             </div>
         );
     }
@@ -279,23 +348,23 @@ export default function DashboardPage() {
         color: string;
         isPositive?: boolean;
     }) => (
-        <Card className="group hover:shadow-lg hover:shadow-primary/5 hover:-translate-y-0.5 transition-all duration-300 cursor-default">
+        <Card className="glass-card inner-border group hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 cursor-default">
             <CardContent className="p-5">
                 <div className="flex items-start justify-between mb-3">
-                    <p className="text-[13px] font-medium text-muted-foreground">{title}</p>
+                    <p className="text-sm font-medium text-muted-foreground">{title}</p>
                     <div className={`p-2 rounded-xl ${color}`}>
                         <Icon className="w-4 h-4" />
                     </div>
                 </div>
                 <p className="text-2xl font-bold tracking-tight financial-value text-foreground">{value}</p>
                 {comparison && (
-                    <div className="flex items-center gap-1 mt-2">
-                        {isPositive !== undefined && (
-                            isPositive
-                                ? <ArrowUpRight className="w-3.5 h-3.5 text-success" />
-                                : <ArrowDownRight className="w-3.5 h-3.5 text-danger" />
-                        )}
-                        <span className={`text-[12px] font-medium ${isPositive ? 'text-success' : 'text-danger'}`}>
+                    <div className="flex items-center mt-3">
+                        <span className={isPositive === undefined ? "text-xs text-muted-foreground" : isPositive ? "badge-glass-success" : "badge-glass-danger"}>
+                            {isPositive !== undefined && (
+                                isPositive
+                                    ? <ArrowUpRight className="w-3 h-3 mr-1" />
+                                    : <ArrowDownRight className="w-3 h-3 mr-1" />
+                            )}
                             {comparison}
                         </span>
                     </div>
@@ -308,7 +377,7 @@ export default function DashboardPage() {
         <div className="space-y-8 animate-in fade-in duration-500">
             {/* Row 1: Today's Metrics */}
             <div>
-                <h2 className="text-[15px] font-semibold text-muted-foreground uppercase tracking-wider mb-4">Visão de Hoje</h2>
+                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">Visão de Hoje</h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <MetricCard
                         title="Receita Hoje"
@@ -337,7 +406,7 @@ export default function DashboardPage() {
 
             {/* Row 2: Month Metrics */}
             <div>
-                <h2 className="text-[15px] font-semibold text-muted-foreground uppercase tracking-wider mb-4">Visão do Mês</h2>
+                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">Visão do Mês</h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <MetricCard
                         title="Receita do Mês"
@@ -365,28 +434,39 @@ export default function DashboardPage() {
             {/* Charts Section */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Bar Chart: Receita vs Despesas */}
-                <Card>
+                <Card className="glass-card inner-border">
                     <CardHeader className="pb-2">
                         <div className="flex items-center gap-2">
                             <BarChart3 className="w-4 h-4 text-primary" />
-                            <CardTitle className="text-[15px]">Receita vs Despesas</CardTitle>
+                            <CardTitle className="text-sm font-semibold tracking-tight text-gradient-neon">Receita vs Despesas</CardTitle>
                         </div>
-                        <p className="text-[12px] text-muted-foreground">Últimos 7 dias</p>
+                        <p className="text-xs text-muted-foreground">Últimos 7 dias</p>
                     </CardHeader>
                     <CardContent>
                         <div className="h-[260px] mt-2">
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={barChartData} barGap={4}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
+                                    <defs>
+                                        <linearGradient id="colorReceita" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#06B6D4" stopOpacity={0.9} />
+                                            <stop offset="95%" stopColor="#06B6D4" stopOpacity={0.1} />
+                                        </linearGradient>
+                                        <linearGradient id="colorDespesa" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#DB2777" stopOpacity={0.9} />
+                                            <stop offset="95%" stopColor="#DB2777" stopOpacity={0.1} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                                     <XAxis dataKey="date" tick={{ fill: '#94A3B8', fontSize: 12 }} axisLine={false} tickLine={false} />
                                     <YAxis tick={{ fill: '#94A3B8', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(v) => formatCompact(v)} />
                                     <Tooltip
-                                        contentStyle={{ backgroundColor: '#1E293B', border: '1px solid rgba(148,163,184,0.12)', borderRadius: '12px', color: '#E2E8F0', fontSize: '13px' }}
+                                        contentStyle={{ backgroundColor: 'rgba(10,10,10,0.8)', backdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#E2E8F0', fontSize: '13px' }}
                                         labelStyle={{ color: '#94A3B8' }}
                                         formatter={(value: any) => [formatCurrency(Number(value))]}
+                                        cursor={{ fill: 'rgba(255,255,255,0.02)' }}
                                     />
-                                    <Bar dataKey="receipts" name="Receitas" fill="#22C55E" radius={[6, 6, 0, 0]} />
-                                    <Bar dataKey="expenses" name="Despesas" fill="#EF4444" radius={[6, 6, 0, 0]} />
+                                    <Bar dataKey="receipts" name="Receitas" fill="url(#colorReceita)" radius={[6, 6, 0, 0]} />
+                                    <Bar dataKey="expenses" name="Despesas" fill="url(#colorDespesa)" radius={[6, 6, 0, 0]} />
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
@@ -394,13 +474,13 @@ export default function DashboardPage() {
                 </Card>
 
                 {/* Pie Chart: Receita por Setor */}
-                <Card>
+                <Card className="glass-card inner-border">
                     <CardHeader className="pb-2">
                         <div className="flex items-center gap-2">
                             <PieIcon className="w-4 h-4 text-primary" />
-                            <CardTitle className="text-[15px]">Receita por Setor</CardTitle>
+                            <CardTitle className="text-sm font-semibold tracking-tight">Receita por Setor</CardTitle>
                         </div>
-                        <p className="text-[12px] text-muted-foreground">Mês atual</p>
+                        <p className="text-xs text-muted-foreground">Mês atual</p>
                     </CardHeader>
                     <CardContent>
                         <div className="h-[260px] mt-2">
@@ -445,20 +525,20 @@ export default function DashboardPage() {
 
             {/* Despesas por Categoria chart */}
             {despesasPorCategoria.length > 0 && (
-                <Card>
+                <Card className="glass-card inner-border">
                     <CardHeader className="pb-2">
                         <div className="flex items-center gap-2">
                             <PieIcon className="w-4 h-4 text-danger" />
-                            <CardTitle className="text-[15px]">Despesas por Categoria</CardTitle>
+                            <CardTitle className="text-sm font-semibold tracking-tight">Despesas por Categoria</CardTitle>
                         </div>
-                        <p className="text-[12px] text-muted-foreground">Mês atual — Top 6</p>
+                        <p className="text-xs text-muted-foreground">Mês atual — Top 6</p>
                     </CardHeader>
                     <CardContent>
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mt-2">
                             {despesasPorCategoria.map((item, i) => (
                                 <div key={item.name} className="bg-muted/50 rounded-xl p-4 text-center border border-border/50">
                                     <div className="w-3 h-3 rounded-full mx-auto mb-2" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                                    <p className="text-[12px] text-muted-foreground truncate">{item.name}</p>
+                                    <p className="text-xs text-muted-foreground truncate">{item.name}</p>
                                     <p className="text-sm font-bold text-foreground financial-value mt-1">{formatCurrency(item.value)}</p>
                                 </div>
                             ))}
@@ -470,37 +550,39 @@ export default function DashboardPage() {
             {/* DRE Section */}
             {role !== 'funcionario' && (
                 <div>
-                    <h2 className="text-[15px] font-semibold text-muted-foreground uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4 flex items-center gap-2">
                         <BarChart3 className="w-4 h-4 text-primary" />
                         DRE Consolidado — Mês Atual
                     </h2>
-                    <Card className="overflow-hidden max-w-4xl">
+                    <Card className="glass-card inner-border overflow-hidden max-w-4xl">
                         <CardContent className="p-0">
                             <div className="divide-y divide-border">
                                 <div className="p-4 px-6 flex justify-between items-center bg-primary/5">
-                                    <span className="font-semibold text-foreground text-[14px]">1. Receita Bruta Total</span>
+                                    <span className="font-semibold text-foreground text-sm tracking-tight">1. Receita Bruta Total</span>
                                     <span className="font-bold text-success text-lg financial-value">{formatCurrency(stats.receitaMes)}</span>
                                 </div>
-                                <div className="p-4 px-6 pl-10 flex justify-between items-center text-[13px] text-muted-foreground hover:bg-muted/30 transition-colors">
+                                <div className="p-4 px-6 pl-10 flex justify-between items-center text-sm text-muted-foreground hover:bg-muted/30 transition-colors">
                                     <span>(-) Custos Operacionais (Gelo e Peixe)</span>
                                     <span className="text-danger font-medium financial-value">{formatCurrency(stats.custosMesTotal)}</span>
                                 </div>
-                                <div className="p-4 px-6 flex justify-between items-center bg-primary/5 font-semibold text-[14px]">
+                                <div className="p-4 px-6 flex justify-between items-center bg-primary/5 font-semibold text-sm tracking-tight">
                                     <span className="text-foreground">= Lucro Bruto</span>
                                     <span className="text-foreground financial-value">{formatCurrency(stats.receitaMes - stats.custosMesTotal)}</span>
                                 </div>
-                                <div className="p-4 px-6 pl-10 flex justify-between items-center text-[13px] text-muted-foreground hover:bg-muted/30 transition-colors">
+                                <div className="p-4 px-6 pl-10 flex justify-between items-center text-sm text-muted-foreground hover:bg-muted/30 transition-colors">
                                     <span>(-) Despesas Administrativas / Rateadas</span>
                                     <span className="text-danger font-medium financial-value">{formatCurrency(stats.despesasAdminMesTotal)}</span>
                                 </div>
-                                <div className="p-4 px-6 flex justify-between items-center bg-gradient-to-r from-primary/20 to-primary/5 font-bold text-lg">
+                                <div className="p-4 px-6 flex justify-between items-center bg-background/20 font-bold text-lg">
                                     <span className="text-foreground">= Resultado Operacional</span>
-                                    <span className={`financial-value ${stats.lucroMes >= 0 ? 'text-success' : 'text-danger'}`}>
+                                    <span className={`financial-value ${stats.lucroMes >= 0 ? 'text-gradient-neon text-xl' : 'text-danger text-xl'}`}>
                                         {formatCurrency(stats.lucroMes)}
                                     </span>
                                 </div>
-                                <div className="p-3 px-6 text-right text-[13px] text-muted-foreground bg-muted/20">
-                                    Margem: <span className="font-semibold text-foreground">{stats.margemMes.toFixed(2)}%</span>
+                                <div className="p-3 px-6 text-right bg-muted/20">
+                                    <span className={stats.margemMes >= 0 ? "badge-glass-success" : "badge-glass-danger"}>
+                                        Margem: {stats.margemMes.toFixed(2)}%
+                                    </span>
                                 </div>
                             </div>
                         </CardContent>
@@ -512,23 +594,35 @@ export default function DashboardPage() {
             {role !== 'funcionario' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
                     {/* DRE Açougue */}
-                    <Card className="overflow-hidden">
+                    <Card className="glass-card inner-border overflow-hidden">
                         <CardHeader className="pb-2 bg-primary/5">
-                            <CardTitle className="text-[14px] flex items-center gap-2">
+                            <CardTitle className="text-sm font-semibold tracking-tight flex items-center gap-2">
                                 <div className="w-2 h-2 rounded-full bg-chart-1" />
                                 DRE Açougue
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="p-0">
-                            <div className="divide-y divide-border text-[13px]">
+                            <div className="divide-y divide-border text-sm">
                                 <div className="p-3 px-5 flex justify-between">
                                     <span className="text-muted-foreground">Receita</span>
                                     <span className="text-success font-medium financial-value">{formatCurrency(stats.receitaAcougue)}</span>
                                 </div>
+                                {Object.entries(stats.despesasAcouguePorPlano).map(([plano, valor]) => (
+                                    <div key={plano} className="p-3 px-5 flex justify-between hover:bg-muted/30 transition-colors">
+                                        <span className="text-muted-foreground">(-) {plano}</span>
+                                        <span className="text-danger font-medium financial-value">-{formatCurrency(valor)}</span>
+                                    </div>
+                                ))}
+                                {stats.custoAcougue > 0 && (
+                                    <div className="p-3 px-5 flex justify-between hover:bg-muted/30 transition-colors">
+                                        <span className="text-muted-foreground">(-) Custos Operacionais</span>
+                                        <span className="text-danger font-medium financial-value">-{formatCurrency(stats.custoAcougue)}</span>
+                                    </div>
+                                )}
                                 <div className="p-3 px-5 flex justify-between bg-muted/20 font-semibold">
                                     <span className="text-foreground">Resultado</span>
-                                    <span className={`financial-value ${stats.receitaAcougue > 0 ? 'text-success' : 'text-muted-foreground'}`}>
-                                        {formatCurrency(stats.receitaAcougue)}
+                                    <span className={`financial-value ${(stats.receitaAcougue - (stats.despesaAcougue + stats.custoAcougue)) >= 0 ? 'text-success' : 'text-danger'}`}>
+                                        {formatCurrency(stats.receitaAcougue - (stats.despesaAcougue + stats.custoAcougue))}
                                     </span>
                                 </div>
                             </div>
@@ -536,27 +630,35 @@ export default function DashboardPage() {
                     </Card>
 
                     {/* DRE Peixaria */}
-                    <Card className="overflow-hidden">
+                    <Card className="glass-card inner-border overflow-hidden">
                         <CardHeader className="pb-2 bg-success/5">
-                            <CardTitle className="text-[14px] flex items-center gap-2">
+                            <CardTitle className="text-sm font-semibold tracking-tight flex items-center gap-2">
                                 <div className="w-2 h-2 rounded-full bg-success" />
                                 DRE Peixaria
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="p-0">
-                            <div className="divide-y divide-border text-[13px]">
+                            <div className="divide-y divide-border text-sm">
                                 <div className="p-3 px-5 flex justify-between">
                                     <span className="text-muted-foreground">Receita</span>
                                     <span className="text-success font-medium financial-value">{formatCurrency(stats.receitaPeixaria)}</span>
                                 </div>
-                                <div className="p-3 px-5 flex justify-between">
-                                    <span className="text-muted-foreground">(-) Custos</span>
-                                    <span className="text-danger font-medium financial-value">{formatCurrency(stats.custosMesTotal)}</span>
-                                </div>
+                                {Object.entries(stats.despesasPeixariaPorPlano).map(([plano, valor]) => (
+                                    <div key={plano} className="p-3 px-5 flex justify-between hover:bg-muted/30 transition-colors">
+                                        <span className="text-muted-foreground">(-) {plano}</span>
+                                        <span className="text-danger font-medium financial-value">-{formatCurrency(valor)}</span>
+                                    </div>
+                                ))}
+                                {stats.custoPeixaria > 0 && (
+                                    <div className="p-3 px-5 flex justify-between hover:bg-muted/30 transition-colors">
+                                        <span className="text-muted-foreground">(-) Custos Operacionais (Pescado)</span>
+                                        <span className="text-danger font-medium financial-value">-{formatCurrency(stats.custoPeixaria)}</span>
+                                    </div>
+                                )}
                                 <div className="p-3 px-5 flex justify-between bg-muted/20 font-semibold">
                                     <span className="text-foreground">Resultado</span>
-                                    <span className={`financial-value ${(stats.receitaPeixaria - stats.custosMesTotal) >= 0 ? 'text-success' : 'text-danger'}`}>
-                                        {formatCurrency(stats.receitaPeixaria - stats.custosMesTotal)}
+                                    <span className={`financial-value ${(stats.receitaPeixaria - (stats.despesaPeixaria + stats.custoPeixaria)) >= 0 ? 'text-success' : 'text-danger'}`}>
+                                        {formatCurrency(stats.receitaPeixaria - (stats.despesaPeixaria + stats.custoPeixaria))}
                                     </span>
                                 </div>
                             </div>
@@ -566,24 +668,32 @@ export default function DashboardPage() {
             )}
 
             {/* Recent Transactions Table */}
-            <Card>
+            <Card className="glass-card inner-border">
                 <CardHeader>
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                        <CardTitle className="text-[15px]">Últimas Transações</CardTitle>
+                        <CardTitle className="text-sm font-semibold tracking-tight">Últimas Transações</CardTitle>
                         <div className="relative w-full sm:w-64">
                             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                             <Input
                                 placeholder="Buscar transação..."
                                 value={txSearch}
                                 onChange={(e) => { setTxSearch(e.target.value); setTxPage(1); }}
-                                className="pl-9 bg-muted/40 border-border/50 text-[13px] h-9 rounded-lg"
+                                className="pl-9 bg-muted/40 border-border/50 text-sm h-9 rounded-lg"
                             />
                         </div>
                     </div>
                 </CardHeader>
                 <CardContent>
                     {paginatedTx.length === 0 ? (
-                        <p className="text-muted-foreground text-sm py-8 text-center">Nenhuma transação encontrada.</p>
+                        <div className="flex flex-col items-center justify-center py-16 text-center animate-in fade-in duration-500">
+                            <div className="bg-muted/10 p-5 rounded-full mb-4 border border-border/50 shadow-sm">
+                                <Search className="w-8 h-8 text-muted-foreground/60" />
+                            </div>
+                            <h3 className="text-lg font-semibold text-foreground mb-2">Sem resultados</h3>
+                            <p className="text-sm text-muted-foreground max-w-sm mb-6">
+                                Nenhuma transação financeira foi encontrada neste período ou com os termos de busca informados.
+                            </p>
+                        </div>
                     ) : (
                         <>
                             <div className="rounded-xl border border-border overflow-hidden">
@@ -592,6 +702,7 @@ export default function DashboardPage() {
                                         <TableRow className="bg-muted/30 hover:bg-muted/30">
                                             <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Data</TableHead>
                                             <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Tipo</TableHead>
+                                            <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">P.Contas</TableHead>
                                             <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Categoria</TableHead>
                                             <TableHead className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Setor</TableHead>
                                             <TableHead className="text-right text-[12px] font-semibold uppercase tracking-wider text-muted-foreground">Valor</TableHead>
@@ -599,7 +710,7 @@ export default function DashboardPage() {
                                     </TableHeader>
                                     <TableBody>
                                         {paginatedTx.map((tx, i) => (
-                                            <TableRow key={tx.id + i} className="hover:bg-muted/20 transition-colors even:bg-muted/10">
+                                            <TableRow key={tx.id + i} className="hover:bg-muted/20 transition-colors">
                                                 <TableCell className="text-[13px]">
                                                     {format(new Date(tx.data), "dd/MM/yyyy", { locale: ptBR })}
                                                 </TableCell>
@@ -612,6 +723,7 @@ export default function DashboardPage() {
                                                         {tx.tipo}
                                                     </span>
                                                 </TableCell>
+                                                <TableCell className="text-[13px] text-muted-foreground">{tx.plano_contas}</TableCell>
                                                 <TableCell className="text-[13px] text-muted-foreground">{tx.categoria}</TableCell>
                                                 <TableCell className="text-[13px] text-muted-foreground">{tx.setor}</TableCell>
                                                 <TableCell className={`text-right font-semibold text-[13px] financial-value ${tx.tipo === 'Receita' ? 'text-success' : 'text-danger'}`}>
@@ -633,7 +745,7 @@ export default function DashboardPage() {
                                         <button
                                             onClick={() => setTxPage(p => Math.max(1, p - 1))}
                                             disabled={txPage === 1}
-                                            className="p-1.5 rounded-lg hover:bg-muted/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                            className="p-1.5 rounded-lg hover:bg-muted/50 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                                         >
                                             <ChevronLeft className="w-4 h-4" />
                                         </button>
@@ -644,8 +756,8 @@ export default function DashboardPage() {
                                             <button
                                                 key={p}
                                                 onClick={() => setTxPage(p)}
-                                                className={`w-8 h-8 rounded-lg text-[13px] font-medium transition-colors ${p === txPage
-                                                    ? 'bg-primary text-white'
+                                                className={`w-8 h-8 rounded-lg text-[13px] font-medium transition-all active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none ${p === txPage
+                                                    ? 'bg-primary text-white shadow-md'
                                                     : 'hover:bg-muted/50 text-muted-foreground'
                                                     }`}
                                             >
@@ -655,7 +767,7 @@ export default function DashboardPage() {
                                         <button
                                             onClick={() => setTxPage(p => Math.min(totalTxPages, p + 1))}
                                             disabled={txPage === totalTxPages}
-                                            className="p-1.5 rounded-lg hover:bg-muted/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                                            className="p-1.5 rounded-lg hover:bg-muted/50 disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
                                         >
                                             <ChevronRight className="w-4 h-4" />
                                         </button>

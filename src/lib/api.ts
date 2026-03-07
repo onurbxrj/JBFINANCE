@@ -99,8 +99,9 @@ export const updateReceita = async (id: string, receita: Partial<Omit<Receita, '
 };
 
 export const deleteReceita = async (id: string) => {
-    const { error } = await supabase.from('receitas').delete().eq('id', id);
+    const { error, count } = await supabase.from('receitas').delete({ count: 'exact' }).eq('id', id);
     if (error) throw error;
+    if (count === 0) throw new Error("Permissão negada ou registro inexistente.");
     return true;
 };
 
@@ -124,8 +125,9 @@ export const updateDespesa = async (id: string, despesa: Partial<Omit<Despesa, '
 };
 
 export const deleteDespesa = async (id: string) => {
-    const { error } = await supabase.from('despesas').delete().eq('id', id);
+    const { error, count } = await supabase.from('despesas').delete({ count: 'exact' }).eq('id', id);
     if (error) throw error;
+    if (count === 0) throw new Error("Permissão negada ou registro inexistente.");
     return true;
 };
 
@@ -170,8 +172,9 @@ export const updateCustoGelo = async (id: string, custo: Partial<Omit<CustoGelo,
 };
 
 export const deleteCustoGelo = async (id: string) => {
-    const { error } = await supabase.from('custo_gelo').delete().eq('id', id);
+    const { error, count } = await supabase.from('custo_gelo').delete({ count: 'exact' }).eq('id', id);
     if (error) throw error;
+    if (count === 0) throw new Error("Permissão negada ou registro inexistente.");
     return true;
 };
 
@@ -195,8 +198,9 @@ export const updateCustoPeixe = async (id: string, custo: Partial<Omit<CustoPeix
 };
 
 export const deleteCustoPeixe = async (id: string) => {
-    const { error } = await supabase.from('custo_peixe').delete().eq('id', id);
+    const { error, count } = await supabase.from('custo_peixe').delete({ count: 'exact' }).eq('id', id);
     if (error) throw error;
+    if (count === 0) throw new Error("Permissão negada ou registro inexistente.");
     return true;
 };
 

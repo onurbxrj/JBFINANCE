@@ -45,7 +45,7 @@ export default function ReceitasPage() {
     const [isOpen, setIsOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
-    const { role } = useAuth();
+    const { role, userId } = useAuth();
 
     // Search & Pagination
     const [search, setSearch] = useState('');
@@ -92,6 +92,7 @@ export default function ReceitasPage() {
                 setor,
                 categoria,
                 valor: parseFloat(valor),
+                created_by: userId || undefined,
             };
 
             if (editingId) {

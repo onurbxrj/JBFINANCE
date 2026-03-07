@@ -25,18 +25,37 @@ export default function DreAcouguePage() {
 
     const dreData = useMemo(() => {
         let receita = 0, despesasSetor = 0;
+        const despesasPorPlano: Record<string, number> = {};
+
         receitas.forEach(r => { if (r.setor === 'ACOUQUE') receita += r.valor; });
         despesas.forEach(dp => {
+            const plano = dp.plano_contas || 'Sem Plano';
             if (dp.tipo_rateio === 'nenhum' || !dp.tipo_rateio) {
-                if (dp.centro_custo === 'Açougue') despesasSetor += dp.valor;
-            } else {
+                if (dp.centro_custo === 'Açougue') {
+                    despesasSetor += dp.valor;
+                    despesasPorPlano[plano] = (despesasPorPlano[plano] || 0) + dp.valor;
+                }
+            } else if (dp.tipo_rateio === 'igual') {
+                const perc = dp.valor / 2;
+                despesasSetor += perc;
+                despesasPorPlano[plano] = (despesasPorPlano[plano] || 0) + perc;
+            } else if (dp.tipo_rateio === 'percentual') {
                 const myRateios = rateios.filter(rt => rt.despesa_id === dp.id);
-                const perc = myRateios.find(rt => rt.setor === 'Açougue')?.percentual || 0;
-                despesasSetor += (dp.valor * perc) / 100;
+                const percReal = myRateios.find(rt => rt.setor === 'Açougue')?.percentual || 0;
+                const perc = (dp.valor * percReal) / 100;
+                despesasSetor += perc;
+                despesasPorPlano[plano] = (despesasPorPlano[plano] || 0) + perc;
             }
         });
         const resultado = receita - despesasSetor;
-        return { receita, custos: 0, despesas: despesasSetor, resultado, margem: receita > 0 ? (resultado / receita) * 100 : 0 };
+        return {
+            receita,
+            custos: 0,
+            despesas: despesasSetor,
+            despesasPorPlano,
+            resultado,
+            margem: receita > 0 ? (resultado / receita) * 100 : 0
+        };
     }, [receitas, despesas, rateios]);
 
     const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
@@ -45,15 +64,17 @@ export default function DreAcouguePage() {
         <div className="space-y-6 animate-in fade-in duration-500">
             <div>
                 <h1 className="text-2xl font-bold tracking-tight text-foreground">DRE — Açougue</h1>
-                <p className="text-[13px] text-muted-foreground mt-1">Demonstração do Resultado do Exercício do setor Açougue</p>
+                <p className="text-sm text-muted-foreground mt-1">Demonstração do Resultado do Exercício do setor Açougue</p>
             </div>
 
             {isLoading ? (
-                <div className="flex items-center justify-center py-16"><div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+                <div className="space-y-6">
+                    <div className="h-[400px] w-full max-w-3xl rounded-xl bg-muted/20 animate-pulse border border-border/50" />
+                </div>
             ) : (
-                <Card className="max-w-3xl overflow-hidden">
+                <Card className="glass-card inner-border max-w-3xl overflow-hidden">
                     <CardHeader className="bg-primary/5 pb-3">
-                        <CardTitle className="text-[15px] flex items-center gap-2">
+                        <CardTitle className="text-sm font-semibold tracking-tight flex items-center gap-2">
                             <BarChart3 className="w-4 h-4 text-primary" />
                             Resultado Açougue
                         </CardTitle>
@@ -61,27 +82,31 @@ export default function DreAcouguePage() {
                     <CardContent className="p-0">
                         <div className="divide-y divide-border">
                             <div className="p-4 px-6 flex justify-between items-center hover:bg-muted/20 transition-colors">
-                                <span className="font-medium text-foreground text-[14px]">1. Receita Bruta (Açougue)</span>
+                                <span className="font-semibold text-foreground text-sm tracking-tight">1. Receita Bruta (Açougue)</span>
                                 <span className="font-bold text-success financial-value">{formatCurrency(dreData.receita)}</span>
                             </div>
-                            <div className="p-4 px-6 pl-10 flex justify-between items-center text-[13px] text-muted-foreground hover:bg-muted/20 transition-colors">
+                            <div className="p-4 px-6 pl-10 flex justify-between items-center text-sm text-muted-foreground hover:bg-muted/30 transition-colors">
                                 <span>(-) Custos Diretos</span>
                                 <span className="font-medium text-danger financial-value">{formatCurrency(dreData.custos)}</span>
                             </div>
-                            <div className="p-4 px-6 flex justify-between items-center bg-primary/5 font-semibold text-[14px]">
+                            <div className="p-4 px-6 flex justify-between items-center bg-primary/5 font-semibold text-sm tracking-tight">
                                 <span className="text-foreground">= Lucro Bruto</span>
                                 <span className="text-foreground financial-value">{formatCurrency(dreData.receita - dreData.custos)}</span>
                             </div>
-                            <div className="p-4 px-6 pl-10 flex justify-between items-center text-[13px] text-muted-foreground hover:bg-muted/20 transition-colors">
-                                <span>(-) Despesas Rateadas / Fixas</span>
-                                <span className="font-medium text-danger financial-value">{formatCurrency(dreData.despesas)}</span>
-                            </div>
-                            <div className="p-4 px-6 flex justify-between items-center bg-gradient-to-r from-primary/20 to-primary/5 font-bold text-lg">
+                            {Object.entries(dreData.despesasPorPlano).map(([plano, valor]) => (
+                                <div key={plano} className="p-4 px-6 pl-10 flex justify-between items-center text-[13px] text-muted-foreground hover:bg-muted/20 transition-colors">
+                                    <span>(-) {plano}</span>
+                                    <span className="font-medium text-danger financial-value">-{formatCurrency(valor)}</span>
+                                </div>
+                            ))}
+                            <div className="p-4 px-6 flex justify-between items-center bg-background/20 font-bold text-lg">
                                 <span className="text-foreground">= Resultado Operacional</span>
-                                <span className={`financial-value ${dreData.resultado >= 0 ? 'text-success' : 'text-danger'}`}>{formatCurrency(dreData.resultado)}</span>
+                                <span className={`financial-value ${dreData.resultado >= 0 ? 'text-gradient-neon text-xl' : 'text-danger text-xl'}`}>{formatCurrency(dreData.resultado)}</span>
                             </div>
-                            <div className="p-3 px-6 text-right text-[13px] text-muted-foreground bg-muted/20">
-                                Margem: <span className="font-semibold text-foreground">{dreData.margem.toFixed(2)}%</span>
+                            <div className="p-3 px-6 text-right bg-muted/20">
+                                <span className={dreData.margem >= 0 ? "badge-glass-success" : "badge-glass-danger"}>
+                                    Margem: {dreData.margem.toFixed(2)}%
+                                </span>
                             </div>
                         </div>
                     </CardContent>
@@ -89,9 +114,14 @@ export default function DreAcouguePage() {
             )}
 
             {!isLoading && dreData.receita === 0 && dreData.despesas === 0 && (
-                <div className="text-center p-8 bg-muted/30 rounded-2xl border border-dashed border-border">
-                    <p className="text-muted-foreground text-lg font-medium">Nenhum dado lançado para o Açougue</p>
-                    <p className="text-muted-foreground/70 text-sm mt-1">Registre receitas e despesas com setor Açougue para visualizar o DRE.</p>
+                <div className="flex flex-col items-center justify-center py-16 text-center animate-in fade-in duration-500 mt-8 rounded-2xl border border-dashed border-border/50 bg-muted/10 max-w-3xl">
+                    <div className="bg-muted/10 p-5 rounded-full mb-4 shadow-sm border border-border/50">
+                        <BarChart3 className="w-8 h-8 text-muted-foreground/60" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-foreground mb-2">Sem movimentações</h3>
+                    <p className="text-sm text-muted-foreground max-w-sm mb-6">
+                        Registre receitas e despesas com setor Açougue para visualizar o DRE setorial.
+                    </p>
                 </div>
             )}
         </div>
