@@ -3,13 +3,17 @@
 import { useEffect, useState, useMemo } from "react";
 import { getReceitas, getDespesas, getAllRateios, Receita, Despesa, RateioDespesa } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, ChevronLeft, ChevronRight, Calendar } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { format, isSameMonth, subMonths, addMonths } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
 export default function DreAcouguePage() {
     const [receitas, setReceitas] = useState<Receita[]>([]);
     const [despesas, setDespesas] = useState<Despesa[]>([]);
     const [rateios, setRateios] = useState<RateioDespesa[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [currentDate, setCurrentDate] = useState(new Date());
 
     useEffect(() => {
         async function load() {
@@ -27,8 +31,17 @@ export default function DreAcouguePage() {
         let receita = 0, despesasSetor = 0;
         const despesasPorPlano: Record<string, number> = {};
 
-        receitas.forEach(r => { if (r.setor === 'ACOUQUE') receita += r.valor; });
+        receitas.forEach(r => { 
+            const dDate = new Date(r.data + "T12:00:00");
+            if (isSameMonth(dDate, currentDate) && r.setor === 'ACOUQUE') {
+                receita += r.valor; 
+            }
+        });
+
         despesas.forEach(dp => {
+            const dDate = new Date(dp.data + "T12:00:00");
+            if (!isSameMonth(dDate, currentDate)) return;
+
             const plano = dp.plano_contas || 'Sem Plano';
             if (dp.tipo_rateio === 'nenhum' || !dp.tipo_rateio) {
                 if (dp.centro_custo === 'Açougue') {
@@ -56,15 +69,45 @@ export default function DreAcouguePage() {
             resultado,
             margem: receita > 0 ? (resultado / receita) * 100 : 0
         };
-    }, [receitas, despesas, rateios]);
+    }, [receitas, despesas, rateios, currentDate]);
 
     const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
     return (
         <div className="space-y-6 animate-in fade-in duration-500">
-            <div>
-                <h1 className="text-2xl font-bold tracking-tight text-foreground">DRE — Açougue</h1>
-                <p className="text-sm text-muted-foreground mt-1">Demonstração do Resultado do Exercício do setor Açougue</p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">DRE — Açougue</h1>
+                    <p className="text-sm text-muted-foreground mt-1">Demonstração do Resultado do Exercício do setor Açougue</p>
+                </div>
+
+                <div className="flex items-center gap-2 bg-background/50 p-1 rounded-lg border border-border/50 shadow-sm self-start sm:self-auto backdrop-blur-sm">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setCurrentDate(subMonths(currentDate, 1))}
+                        className="h-8 w-8 text-foreground hover:bg-muted/50"
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <div className="flex flex-col items-center justify-center w-36 py-1">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                            <Calendar className="w-3 h-3" />
+                            Mês de Referência
+                        </span>
+                        <span className="text-sm font-bold capitalize text-primary drop-shadow-[0_0_8px_rgba(255,255,255,0.1)]">
+                            {format(currentDate, 'MMMM yyyy', { locale: ptBR })}
+                        </span>
+                    </div>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setCurrentDate(addMonths(currentDate, 1))}
+                        className="h-8 w-8 text-foreground hover:bg-muted/50"
+                    >
+                        <ChevronRight className="h-4 w-4" />
+                    </Button>
+                </div>
             </div>
 
             {isLoading ? (

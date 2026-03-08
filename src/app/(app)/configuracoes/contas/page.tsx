@@ -109,7 +109,7 @@ export default function ContasPage() {
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between">
                         <CardTitle className="text-[15px]">Planos de Contas</CardTitle>
-                        <Button size="sm" onClick={() => openPlanoModal()} className="bg-primary hover:bg-primary/90 text-white gap-1.5 text-[12px] shadow-lg shadow-primary/20">
+                        <Button size="sm" onClick={() => openPlanoModal()} className="bg-primary text-black font-bold gap-1.5 text-[12px] shadow-lg shadow-primary/20">
                             <Plus className="w-3.5 h-3.5" />
                             Novo Plano
                         </Button>
@@ -160,7 +160,7 @@ export default function ContasPage() {
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between">
                         <CardTitle className="text-[15px]">Categorias</CardTitle>
-                        <Button size="sm" onClick={() => openCatModal()} className="bg-primary hover:bg-primary/90 text-white gap-1.5 text-[12px] shadow-lg shadow-primary/20">
+                        <Button size="sm" onClick={() => openCatModal()} className="bg-primary text-black font-bold gap-1.5 text-[12px] shadow-lg shadow-primary/20">
                             <Plus className="w-3.5 h-3.5" />
                             Nova Categoria
                         </Button>
@@ -222,7 +222,7 @@ export default function ContasPage() {
                         </div>
                         <div className="pt-2 flex justify-end gap-2">
                             <Button type="button" variant="ghost" onClick={() => setIsPlanoModalOpen(false)} className="text-muted-foreground">Cancelar</Button>
-                            <Button type="submit" className="bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">Salvar Plano</Button>
+                            <Button type="submit" className="text-black font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">Salvar Plano</Button>
                         </div>
                     </form>
                 </DialogContent>
@@ -241,7 +241,7 @@ export default function ContasPage() {
                         </div>
                         <div className="pt-2 flex justify-end gap-2">
                             <Button type="button" variant="ghost" onClick={() => setIsCatModalOpen(false)} className="text-muted-foreground">Cancelar</Button>
-                            <Button type="submit" className="bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">Salvar</Button>
+                            <Button type="submit" className="text-black font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">Salvar</Button>
                         </div>
                     </form>
                 </DialogContent>

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { getDespesas, addDespesa, updateDespesa, deleteDespesa, saveRateiosDespesa, getRateiosDespesa, getPlanosContas, getCategorias, addPlanoConta, addCategoria, Despesa, PlanoConta, Categoria } from "@/lib/api";
+import { getDespesas, addDespesa, updateDespesa, deleteDespesa, saveRateiosDespesa, getRateiosDespesa, getPlanosContas, getCategorias, addPlanoConta, addCategoria, addDespesasBulk, addRateiosBulk, Despesa, PlanoConta, Categoria } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
-import { Edit2, Trash2, Plus, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { Edit2, Trash2, Plus, Search, ChevronLeft, ChevronRight, Upload, FileSpreadsheet } from "lucide-react";
+import * as xlsx from "xlsx";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
@@ -41,6 +42,9 @@ export default function DespesasPage() {
     const [isOpen, setIsOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
+    const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
+    const [importErrors, setImportErrors] = useState<string[]>([]);
     const { role, userId } = useAuth();
 
     // Search & Pagination
@@ -239,6 +243,256 @@ export default function DespesasPage() {
         }
     }
 
+    async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setIsImporting(true);
+        setImportErrors([]);
+
+        try {
+            const buffer = await file.arrayBuffer();
+            const workbook = xlsx.read(buffer);
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = xlsx.utils.sheet_to_json(sheet);
+
+            let errors: string[] = [];
+            let despesasParaSalvar: any[] = [];
+
+            let currentPlanos = [...planosContasOpts];
+            let currentCats = [...categoriasOpts];
+            
+            // 1. Rastreador Dinâmico de Cabeçalhos
+            // Procurar qual linha possui "DATA" e "VALOR"
+            let headerRowIndex = -1;
+            let colMap = { data: '', valor: '', ccust: '', plano: '', cat: '', desc: '', obs: '' };
+
+            const rawData = xlsx.utils.sheet_to_json(sheet, { header: 1 }); // Matrix raw
+            
+            for (let i = 0; i < rawData.length; i++) {
+                const row: any = rawData[i];
+                if (!Array.isArray(row)) continue;
+                const concatRow = row.map(c => String(c).toLowerCase().trim()).join('|');
+                if (concatRow.includes('data') && concatRow.includes('valor')) {
+                    headerRowIndex = i;
+                    // Mapear headers
+                    row.forEach((cell: any, cIdx: number) => {
+                        const cName = String(cell).toLowerCase().trim().replace(/[\u0300-\u036f]/g, '');
+                        if (cName.includes('data')) colMap.data = cIdx.toString();
+                        else if (cName === 'valor') colMap.valor = cIdx.toString();
+                        else if (cName.includes('centro') || cName.includes('setor')) colMap.ccust = cIdx.toString();
+                        else if (cName.includes('plano')) colMap.plano = cIdx.toString();
+                        else if (cName.includes('cat')) colMap.cat = cIdx.toString();
+                        else if (cName.includes('desc')) colMap.desc = cIdx.toString();
+                        else if (cName.includes('obs')) colMap.obs = cIdx.toString();
+                    });
+                    break;
+                }
+            }
+
+            if (headerRowIndex === -1) {
+                setImportErrors(['Não foi possível identificar os Cabeçalhos reais (Data, Valor, etc) na planilha.']);
+                setIsImporting(false);
+                return;
+            }
+
+            // Memória de herança (para preencher campos vazios da mesma data)
+            let lastData = "";
+            let lastCat = "Indefinido";
+            let lastCcust = "Geral / Loja";
+            let lastPlano = "Geral";
+
+            for (let index = headerRowIndex + 1; index < rawData.length; index++) {
+                const row: any = rawData[index];
+                const linha = index + 1;
+                
+                // Pular linhas vazias puras
+                if (!row || row.length === 0 || row.join('').trim() === '') continue;
+
+                // Extrair valores usando mapeamento
+                let valData = row[colMap.data as any];
+                const valValor = row[colMap.valor as any];
+                let valCentroCusto = row[colMap.ccust as any] || lastCcust;
+                let valPlano = row[colMap.plano as any] || lastPlano;
+                let valCat = row[colMap.cat as any] || lastCat;
+                const valDesc = row[colMap.desc as any];
+                const valObs = colMap.obs ? row[colMap.obs as any] : "";
+
+                // Se a linha não tem valor ou descrição principais salvas após header, apenas pula (linha não computável)
+                if (valValor === undefined || valValor === null || valValor === '') {
+                    continue; 
+                }
+
+                if (valData === undefined || valData === null || valData === '') {
+                    if (lastData) valData = lastData;
+                    else {
+                        errors.push(`Linha ${linha}: Data não definida e sem data anterior para herdar.`);
+                        continue;
+                    }
+                }
+
+                // Normalização Case-Insensitive: Plano de Contas
+                let planoOficial = "";
+                const planoStr = String(valPlano).trim() || 'Geral';
+                const planoMatch = currentPlanos.find(p => p.nome.toLowerCase() === planoStr.toLowerCase());
+                
+                if (planoMatch) {
+                    planoOficial = planoMatch.nome;
+                } else {
+                    if (role === 'diretor') {
+                        try {
+                            const newP = await addPlanoConta(planoStr);
+                            currentPlanos.push(newP);
+                            planoOficial = newP.nome;
+                        } catch (e) {
+                            errors.push(`Linha ${linha}: Erro ao criar novo Plano de Contas '${planoStr}'.`);
+                            continue;
+                        }
+                    } else {
+                        errors.push(`Linha ${linha}: Plano de Contas '${planoStr}' não existe. Mude para 'Operacional' ou consulte o diretor.`);
+                        continue;
+                    }
+                }
+
+                // Normalização Case-Insensitive: Categoria
+                let catOficial = "";
+                const catStr = String(valCat).trim() || 'Geral';
+                const catMatch = currentCats.find(c => c.nome.toLowerCase() === catStr.toLowerCase());
+
+                if (catMatch) {
+                    catOficial = catMatch.nome;
+                } else {
+                    if (role === 'diretor') {
+                        try {
+                            const newC = await addCategoria(catStr);
+                            currentCats.push(newC);
+                            catOficial = newC.nome;
+                        } catch (e) {
+                            errors.push(`Linha ${linha}: Erro ao criar nova Categoria '${catStr}'.`);
+                            continue;
+                        }
+                    } else {
+                        errors.push(`Linha ${linha}: Categoria '${catStr}' não existe no sistema.`);
+                        continue;
+                    }
+                }
+
+                // Tratar data (Excel serial date to YYYY-MM-DD ou string já formatada)
+                let dataFormatada = "";
+                if (typeof valData === "number") {
+                    const dateObj = new Date((valData - (25567 + 1)) * 86400 * 1000); 
+                    dataFormatada = dateObj.toISOString().split("T")[0];
+                } else {
+                    const strData = String(valData);
+                    if (strData.includes("/")) {
+                        const partes = strData.split("/");
+                        if (partes.length === 3) {
+                            dataFormatada = `${partes[2]}-${partes[1].padStart(2, '0')}-${partes[0].padStart(2, '0')}`;
+                        } else {
+                            dataFormatada = strData;
+                        }
+                    } else {
+                        dataFormatada = strData;
+                    }
+                }
+
+                // Tratar valor
+                let valorTratado = 0;
+                if (typeof valValor === "string") {
+                     valorTratado = parseFloat(valValor.replace('R$', '').replace(/\./g, '').replace(',', '.').trim());
+                } else if (typeof valValor === "number") {
+                     valorTratado = valValor;
+                }
+                
+                if (isNaN(valorTratado) || valorTratado < 0) {
+                     errors.push(`Linha ${linha}: Valor financeiro inválido '${valValor}'.`);
+                     continue;
+                }
+
+                // Normalizar o Centro de Custo para bater com os Selectors (Açougue, Peixaria, Geral / Loja)
+                let rawCcust = String(valCentroCusto).toLowerCase().trim();
+                let ccustNormalizado = "Geral / Loja";
+                if (rawCcust.includes('açougue') || rawCcust.includes('acougue')) {
+                    ccustNormalizado = "Açougue";
+                } else if (rawCcust.includes('peix') || rawCcust.includes('peixaria')) {
+                    ccustNormalizado = "Peixaria";
+                }
+
+                // Atualizar memórias
+                lastData = valData;
+                lastPlano = String(valPlano).trim();
+                lastCat = String(valCat).trim();
+                lastCcust = ccustNormalizado;
+
+                let tipoRateio = "nenhum";
+                if (ccustNormalizado === "Geral / Loja") {
+                    tipoRateio = "percentual";
+                }
+
+                despesasParaSalvar.push({
+                    data: dataFormatada,
+                    valor: valorTratado,
+                    centro_custo: lastCcust,
+                    plano_contas: planoOficial,
+                    categoria: catOficial,
+                    descricao: String(valDesc || '').trim() || 'Despesa não especificada',
+                    observacao: String(valObs || '').trim(),
+                    tipo_rateio: tipoRateio,
+                    created_by: userId || undefined
+                });
+            }
+
+            // Atualiza o estado da tabela se novos registros foram criados
+            if (currentPlanos.length > planosContasOpts.length) setPlanosContasOpts([...currentPlanos]);
+            if (currentCats.length > categoriasOpts.length) setCategoriasOpts([...currentCats]);
+
+            if (errors.length > 0) {
+                setImportErrors(errors);
+                return;
+            }
+
+            if (despesasParaSalvar.length === 0) {
+                 setImportErrors(["Nenhum dado válido encontrado na planilha."]);
+                 return;
+            }
+
+            const savedDespesas = await addDespesasBulk(despesasParaSalvar);
+
+            // Gerar rateios automaticamente se necessário
+            const rateiosToSave: any[] = [];
+            if (savedDespesas && Array.isArray(savedDespesas)) {
+                savedDespesas.forEach((d: any) => {
+                    if (d.tipo_rateio === "percentual" && d.centro_custo === "Geral / Loja") {
+                        rateiosToSave.push({
+                            despesa_id: d.id,
+                            setor: "Açougue",
+                            percentual: 66.66
+                        });
+                        rateiosToSave.push({
+                            despesa_id: d.id,
+                            setor: "Peixaria",
+                            percentual: 33.34
+                        });
+                    }
+                });
+            }
+
+            if (rateiosToSave.length > 0) {
+                 await addRateiosBulk(rateiosToSave);
+            }
+
+            setIsImportModalOpen(false);
+            alert(`${despesasParaSalvar.length} despesa(s) importada(s) com sucesso!`);
+            loadData();
+        } catch (error: any) {
+            console.error(error);
+            setImportErrors([`Erro no processo (${error.message || 'Desconhecido'}): verifique o log.`]);
+        } finally {
+            setIsImporting(false);
+            e.target.value = ''; // Reset file input
+        }
+    }
+
     const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
     // Filtered + paginated
@@ -266,13 +520,69 @@ export default function DespesasPage() {
                     <h1 className="text-2xl font-bold tracking-tight text-foreground">Despesas</h1>
                     <p className="text-[13px] text-muted-foreground mt-1">Gerencie despesas, rateios e centros de custo</p>
                 </div>
-                <Dialog open={isOpen} onOpenChange={handleCloseModal}>
-                    <DialogTrigger asChild>
-                        <Button className="bg-primary hover:bg-primary/90 text-white shadow-lg shadow-primary/20 font-medium gap-2">
-                            <Plus className="w-4 h-4" />
-                            Nova Despesa
-                        </Button>
-                    </DialogTrigger>
+                
+                <div className="flex items-center gap-2">
+                    <Dialog open={isImportModalOpen} onOpenChange={setIsImportModalOpen}>
+                        <DialogTrigger asChild>
+                            <Button variant="outline" className="bg-card text-foreground border-border hover:bg-muted/50 gap-2 font-medium">
+                                <Upload className="w-4 h-4" />
+                                <span className="hidden sm:inline">Importar</span>
+                            </Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-[460px] bg-card border-border">
+                            <DialogHeader>
+                                <DialogTitle className="text-foreground">Importar Despesas</DialogTitle>
+                                <DialogDescription className="text-muted-foreground text-[13px]">
+                                    Faça upload de uma planilha do Excel para importar despesas em lote.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 pt-2">
+                                <div className="p-4 bg-muted/30 border border-border/50 rounded-xl flex items-center gap-3">
+                                    <FileSpreadsheet className="w-8 h-8 text-primary/80" />
+                                    <div className="text-[13px]">
+                                        <p className="text-foreground font-medium">Precisa do modelo?</p>
+                                        <a href="/template-despesas.xlsx" download className="text-primary hover:underline">
+                                            Baixar template preenchível
+                                        </a>
+                                    </div>
+                                </div>
+                                
+                                {importErrors.length > 0 && (
+                                    <div className="p-3 bg-danger/10 border border-danger/20 rounded-lg text-[13px] text-danger/90 max-h-32 overflow-y-auto">
+                                        <p className="font-semibold mb-1">Encontramos os seguintes problemas:</p>
+                                        <ul className="list-disc pl-4 space-y-1">
+                                            {importErrors.map((err, i) => <li key={i}>{ err }</li>)}
+                                        </ul>
+                                    </div>
+                                )}
+
+                                <div className="grid gap-2">
+                                    <Label className={labelClasses}>Selecione o arquivo (.xlsx, .csv)</Label>
+                                    <Input 
+                                        type="file" 
+                                        accept=".xlsx, .xls, .csv" 
+                                        onChange={handleFileUpload} 
+                                        disabled={isImporting}
+                                        className="bg-muted/40 border-border/50 text-foreground cursor-pointer file:text-foreground file:bg-muted file:border-0 file:mr-4 file:py-1 file:px-3 file:rounded-md hover:file:bg-muted/80" 
+                                    />
+                                </div>
+                                
+                                {isImporting && (
+                                    <p className="text-[13px] text-center text-muted-foreground py-2 animate-pulse">
+                                        Processando arquivo e enviando...
+                                    </p>
+                                )}
+                            </div>
+                        </DialogContent>
+                    </Dialog>
+
+                    <Dialog open={isOpen} onOpenChange={handleCloseModal}>
+                        <DialogTrigger asChild>
+                            <Button className="bg-primary text-black font-bold shadow-lg shadow-primary/20 font-medium gap-2">
+                                <Plus className="w-4 h-4" />
+                                <span className="hidden sm:inline">Nova Despesa</span>
+                            </Button>
+                        </DialogTrigger>
                     <DialogContent className="sm:max-w-[520px] bg-card border-border max-h-[90vh] overflow-y-auto">
                         <DialogHeader>
                             <DialogTitle className="text-foreground">{editingId ? "Editar Despesa" : "Registrar Nova Despesa"}</DialogTitle>
@@ -404,13 +714,14 @@ export default function DespesasPage() {
                                 <Button type="button" variant="ghost" onClick={() => handleCloseModal(false)} className="text-muted-foreground hover:text-foreground">
                                     Cancelar
                                 </Button>
-                                <Button type="submit" disabled={isSubmitting} className="bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
+                                <Button type="submit" disabled={isSubmitting} className="text-black font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
                                     {isSubmitting ? "Salvando..." : "Salvar Despesa"}
                                 </Button>
                             </div>
                         </form>
                     </DialogContent>
                 </Dialog>
+                </div>
 
                 {/* Secondary Modals */}
                 <Dialog open={isPlanoModalOpen} onOpenChange={setIsPlanoModalOpen}>
@@ -428,7 +739,7 @@ export default function DespesasPage() {
                             </div>
                             <div className="pt-2 flex justify-end gap-2">
                                 <Button type="button" variant="ghost" onClick={() => setIsPlanoModalOpen(false)} className="text-muted-foreground">Cancelar</Button>
-                                <Button type="submit" className="bg-primary hover:bg-primary/90">Salvar</Button>
+                                <Button type="submit" className="text-black font-bold bg-primary hover:bg-primary/90">Salvar</Button>
                             </div>
                         </form>
                     </DialogContent>
@@ -449,7 +760,7 @@ export default function DespesasPage() {
                             </div>
                             <div className="pt-2 flex justify-end gap-2">
                                 <Button type="button" variant="ghost" onClick={() => setIsCatModalOpen(false)} className="text-muted-foreground">Cancelar</Button>
-                                <Button type="submit" className="bg-primary hover:bg-primary/90">Salvar</Button>
+                                <Button type="submit" className="text-black font-bold bg-primary hover:bg-primary/90">Salvar</Button>
                             </div>
                         </form>
                     </DialogContent>
@@ -557,7 +868,7 @@ export default function DespesasPage() {
                                             <ChevronLeft className="w-4 h-4" />
                                         </button>
                                         {Array.from({ length: totalPages }, (_, i) => i + 1).slice(Math.max(0, page - 3), Math.min(totalPages, page + 2)).map(p => (
-                                            <button key={p} onClick={() => setPage(p)} className={`w-8 h-8 rounded-lg text-[13px] font-medium transition-colors ${p === page ? 'bg-primary text-white' : 'hover:bg-muted/50 text-muted-foreground'}`}>
+                                            <button key={p} onClick={() => setPage(p)} className={`w-8 h-8 rounded-lg text-[13px] font-medium transition-colors ${p === page ? 'bg-primary text-black font-bold' : 'hover:bg-muted/50 text-muted-foreground'}`}>
                                                 {p}
                                             </button>
                                         ))}

@@ -65,16 +65,17 @@
 }
 
 :root {
+  color-scheme: dark;
   --radius: 0.5rem;
 
   /* Ultra-Premium Obsidian Theme - Linear/Vercel inspired */
-  --background: #000000;
+  --background: #050505;
   --foreground: #EDEDED;
 
-  --card: #0A0A0A;
+  --card: #0d0d0d;
   --card-foreground: #EDEDED;
 
-  --popover: #0A0A0A;
+  --popover: #0d0d0d;
   --popover-foreground: #EDEDED;
 
   /* Sofisticação Monocromática */
@@ -140,6 +141,21 @@
   transition-property: background-color, border-color, color, fill, stroke;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 150ms;
+}
+
+/* Fix for native date pickers in Radix Dialogs */
+input[type="date"] {
+  position: relative;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 /* Premium number styling for financial values */

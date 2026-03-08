@@ -37,9 +37,10 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
 import { getReceitas, getDespesas, getCustosGelo, getCustosPeixe, getAllRateios, Receita, Despesa, CustoGelo, CustoPeixe, RateioDespesa } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
-import { format } from 'date-fns';
+import { format, subMonths, addMonths, isSameMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 const PIE_COLORS = ['#3B82F6', '#22C55E', '#F59E0B', '#8B5CF6', '#EF4444', '#06B6D4'];
@@ -52,6 +53,9 @@ export default function DashboardPage() {
     const [rateios, setRateios] = useState<RateioDespesa[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const { role } = useAuth();
+
+    // Time filter
+    const [currentDate, setCurrentDate] = useState(new Date());
 
     // Transactions search + pagination
     const [txSearch, setTxSearch] = useState('');
@@ -85,8 +89,8 @@ export default function DashboardPage() {
 
     const stats = useMemo(() => {
         const todayStr = new Date().toISOString().split('T')[0];
-        const currentMonth = new Date().getMonth();
-        const currentYear = new Date().getFullYear();
+        const currentMonth = currentDate.getMonth();
+        const currentYear = currentDate.getFullYear();
 
         // Yesterday for comparison
         const yesterday = new Date();
@@ -208,12 +212,12 @@ export default function DashboardPage() {
             despesasAcouguePorPlano,
             despesasPeixariaPorPlano
         };
-    }, [receitas, despesas, custosGelo, custosPeixe, rateios]);
+    }, [receitas, despesas, custosGelo, custosPeixe, rateios, currentDate]);
 
     // Despesas por categoria (for pie chart)
     const despesasPorCategoria = useMemo(() => {
-        const currentMonth = new Date().getMonth();
-        const currentYear = new Date().getFullYear();
+        const currentMonth = currentDate.getMonth();
+        const currentYear = currentDate.getFullYear();
         const map: Record<string, number> = {};
 
         despesas.forEach(dp => {
@@ -227,7 +231,7 @@ export default function DashboardPage() {
             .map(([name, value]) => ({ name, value }))
             .sort((a, b) => b.value - a.value)
             .slice(0, 6);
-    }, [despesas]);
+    }, [despesas, currentDate]);
 
     // Bar chart: Receita vs Despesa by day (last 7 days)
     const barChartData = useMemo(() => {
@@ -373,12 +377,37 @@ export default function DashboardPage() {
         </Card>
     );
 
+    const isCurrentMonth = isSameMonth(currentDate, new Date());
+    const handlePrevMonth = () => setCurrentDate(prev => subMonths(prev, 1));
+    const handleNextMonth = () => setCurrentDate(prev => addMonths(prev, 1));
+
     return (
         <div className="space-y-8 animate-in fade-in duration-500">
-            {/* Row 1: Today's Metrics */}
-            <div>
-                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">Visão de Hoje</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Header & Month Filter */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 w-full">
+                <div>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">Dashboard</h1>
+                    <p className="text-[13px] text-muted-foreground mt-1">Visão geral financeira consolidada</p>
+                </div>
+                
+                <div className="flex items-center gap-2 bg-muted/40 border border-border/50 rounded-xl p-1 shadow-sm">
+                    <Button variant="ghost" size="icon" onClick={handlePrevMonth} className="h-8 w-8 rounded-lg hover:bg-muted/50 text-muted-foreground">
+                        <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <div className="w-36 text-center font-semibold text-sm text-foreground capitalize">
+                        {format(currentDate, "MMMM 'de' yyyy", { locale: ptBR })}
+                    </div>
+                    <Button variant="ghost" size="icon" onClick={handleNextMonth} disabled={isCurrentMonth} className="h-8 w-8 rounded-lg hover:bg-muted/50 text-muted-foreground disabled:opacity-30">
+                        <ChevronRight className="h-4 w-4" />
+                    </Button>
+                </div>
+            </div>
+
+            {/* Row 1: Today's Metrics (Só exibe se for o mês corrente) */}
+            {isCurrentMonth && (
+                <div>
+                    <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">Visão de Hoje</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <MetricCard
                         title="Receita Hoje"
                         value={formatCurrency(stats.receitaHoje)}
@@ -403,10 +432,13 @@ export default function DashboardPage() {
                     />
                 </div>
             </div>
+            )}
 
             {/* Row 2: Month Metrics */}
             <div>
-                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">Visão do Mês</h2>
+                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">
+                    Visão do Mês {isCurrentMonth ? '(Atual)' : ''}
+                </h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <MetricCard
                         title="Receita do Mês"
@@ -757,7 +789,7 @@ export default function DashboardPage() {
                                                 key={p}
                                                 onClick={() => setTxPage(p)}
                                                 className={`w-8 h-8 rounded-lg text-[13px] font-medium transition-all active:scale-95 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none ${p === txPage
-                                                    ? 'bg-primary text-white shadow-md'
+                                                    ? 'bg-primary text-black font-bold shadow-md'
                                                     : 'hover:bg-muted/50 text-muted-foreground'
                                                     }`}
                                             >

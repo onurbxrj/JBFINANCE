@@ -177,7 +177,7 @@ export default function ReceitasPage() {
 
                 <Dialog open={isOpen} onOpenChange={handleCloseModal}>
                     <DialogTrigger asChild>
-                        <Button className="bg-primary hover:bg-primary/90 text-white shadow-lg shadow-primary/20 font-medium gap-2">
+                        <Button className="bg-primary text-black font-bold shadow-lg shadow-primary/20 font-medium gap-2">
                             <Plus className="w-4 h-4" />
                             Nova Receita
                         </Button>
@@ -248,7 +248,7 @@ export default function ReceitasPage() {
                                 <Button type="button" variant="ghost" onClick={() => handleCloseModal(false)} className="text-muted-foreground hover:text-foreground">
                                     Cancelar
                                 </Button>
-                                <Button type="submit" disabled={isSubmitting} className="bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
+                                <Button type="submit" disabled={isSubmitting} className="text-black font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
                                     {isSubmitting ? "Salvando..." : "Salvar Receita"}
                                 </Button>
                             </div>
@@ -354,7 +354,7 @@ export default function ReceitasPage() {
                                             <ChevronLeft className="w-4 h-4" />
                                         </button>
                                         {Array.from({ length: totalPages }, (_, i) => i + 1).slice(Math.max(0, page - 3), Math.min(totalPages, page + 2)).map(p => (
-                                            <button key={p} onClick={() => setPage(p)} className={`w-8 h-8 rounded-lg text-[13px] font-medium transition-colors ${p === page ? 'bg-primary text-white' : 'hover:bg-muted/50 text-muted-foreground'}`}>
+                                            <button key={p} onClick={() => setPage(p)} className={`w-8 h-8 rounded-lg text-[13px] font-medium transition-colors ${p === page ? 'bg-primary text-black font-bold' : 'hover:bg-muted/50 text-muted-foreground'}`}>
                                                 {p}
                                             </button>
                                         ))}

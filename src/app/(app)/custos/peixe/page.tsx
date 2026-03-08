@@ -164,7 +164,7 @@ export default function CustosPeixePage() {
                 </div>
                 <Dialog open={isPeixeOpen} onOpenChange={handleCloseModal}>
                     <DialogTrigger asChild>
-                        <Button className="bg-primary hover:bg-primary/90 text-white shadow-lg shadow-primary/20 font-medium gap-2">
+                        <Button className="bg-primary text-black font-bold shadow-lg shadow-primary/20 font-medium gap-2">
                             <Plus className="w-4 h-4" />
                             Novo Registro
                         </Button>
@@ -205,7 +205,7 @@ export default function CustosPeixePage() {
                             </div>
                             <div className="pt-4 flex justify-end gap-2">
                                 <Button type="button" variant="ghost" onClick={() => handleCloseModal(false)} className="text-muted-foreground">Cancelar</Button>
-                                <Button type="submit" disabled={isPeixeSubmitting} className="bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
+                                <Button type="submit" disabled={isPeixeSubmitting} className="text-black font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
                                     {isPeixeSubmitting ? "Salvando..." : "Salvar"}
                                 </Button>
                             </div>
@@ -287,7 +287,7 @@ export default function CustosPeixePage() {
                                     <div className="flex items-center gap-1">
                                         <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="p-1.5 rounded-lg hover:bg-muted/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"><ChevronLeft className="w-4 h-4" /></button>
                                         {Array.from({ length: totalPages }, (_, i) => i + 1).slice(Math.max(0, page - 3), Math.min(totalPages, page + 2)).map(p => (
-                                            <button key={p} onClick={() => setPage(p)} className={`w-8 h-8 rounded-lg text-[13px] font-medium transition-colors ${p === page ? 'bg-primary text-white' : 'hover:bg-muted/50 text-muted-foreground'}`}>{p}</button>
+                                            <button key={p} onClick={() => setPage(p)} className={`w-8 h-8 rounded-lg text-[13px] font-medium transition-colors ${p === page ? 'bg-primary text-black font-bold' : 'hover:bg-muted/50 text-muted-foreground'}`}>{p}</button>
                                         ))}
                                         <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="p-1.5 rounded-lg hover:bg-muted/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"><ChevronRight className="w-4 h-4" /></button>
                                     </div>

@@ -107,6 +107,7 @@ export const deleteReceita = async (id: string) => {
 
 // Despesas
 export const getDespesas = async () => {
+    console.log("Fetching despesas...");
     const { data, error } = await supabase.from('despesas').select('*').order('data', { ascending: false });
     if (error) throw error;
     return data as Despesa[];
@@ -114,6 +115,12 @@ export const getDespesas = async () => {
 
 export const addDespesa = async (despesa: Omit<Despesa, 'id' | 'created_at'>) => {
     const { data, error } = await supabase.from('despesas').insert(despesa).select().single();
+    if (error) throw error;
+    return data;
+};
+
+export const addDespesasBulk = async (despesas: Omit<Despesa, 'id' | 'created_at'>[]) => {
+    const { data, error } = await supabase.from('despesas').insert(despesas).select();
     if (error) throw error;
     return data;
 };
@@ -150,6 +157,13 @@ export const saveRateiosDespesa = async (despesaId: string, rateios: Omit<Rateio
         const { error } = await supabase.from('rateio_despesas').insert(payload);
         if (error) throw error;
     }
+};
+
+export const addRateiosBulk = async (rateios: Omit<RateioDespesa, 'id'>[]) => {
+    if (rateios.length === 0) return [];
+    const { data, error } = await supabase.from('rateio_despesas').insert(rateios).select();
+    if (error) throw error;
+    return data;
 };
 
 // Custos Gelo
