@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { getReceitas, addReceita, updateReceita, deleteReceita, Receita } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
-import { Edit2, Trash2, Plus, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { Edit2, Trash2, Plus, Search, ChevronLeft, ChevronRight, FileDown, Filter, X } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
@@ -51,6 +51,23 @@ export default function ReceitasPage() {
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(1);
     const perPage = 10;
+
+    // Advanced Filters
+    const [filterDataInicio, setFilterDataInicio] = useState('');
+    const [filterDataFim, setFilterDataFim] = useState('');
+    const [filterSetor, setFilterSetor] = useState('');
+    const [filterCategoria, setFilterCategoria] = useState('');
+    const [showFilters, setShowFilters] = useState(false);
+
+    const hasActiveFilters = filterDataInicio || filterDataFim || filterSetor || filterCategoria;
+
+    function clearFilters() {
+        setFilterDataInicio('');
+        setFilterDataFim('');
+        setFilterSetor('');
+        setFilterCategoria('');
+        setPage(1);
+    }
 
     // Form State
     const [data, setData] = useState(new Date().toISOString().split("T")[0]);
@@ -154,18 +171,118 @@ export default function ReceitasPage() {
     // Filtered + paginated data
     const filtered = useMemo(() => {
         const q = search.toLowerCase();
-        return receitas.filter(r =>
-            r.categoria.toLowerCase().includes(q) ||
-            r.setor.toLowerCase().includes(q) ||
-            r.data.includes(q)
-        );
-    }, [receitas, search]);
+        return receitas.filter(r => {
+            // Text search
+            if (q && !(
+                r.categoria.toLowerCase().includes(q) ||
+                r.setor.toLowerCase().includes(q) ||
+                r.data.includes(q)
+            )) return false;
+
+            // Date range filter
+            const rDate = r.data.split('T')[0];
+            if (filterDataInicio && rDate < filterDataInicio) return false;
+            if (filterDataFim && rDate > filterDataFim) return false;
+
+            // Setor filter
+            if (filterSetor && r.setor !== filterSetor) return false;
+
+            // Categoria filter
+            if (filterCategoria && r.categoria !== filterCategoria) return false;
+
+            return true;
+        });
+    }, [receitas, search, filterDataInicio, filterDataFim, filterSetor, filterCategoria]);
 
     const paginated = filtered.slice((page - 1) * perPage, page * perPage);
     const totalPages = Math.ceil(filtered.length / perPage);
 
     // Total value
     const totalValue = useMemo(() => filtered.reduce((acc, r) => acc + r.valor, 0), [filtered]);
+
+    /** Exporta os dados filtrados em PDF */
+    async function handleExportPDF() {
+        const { default: jsPDF } = await import('jspdf');
+        const { default: autoTable } = await import('jspdf-autotable');
+
+        const doc = new jsPDF('portrait', 'mm', 'a4');
+        const pageWidth = doc.internal.pageSize.getWidth();
+
+        // Header
+        doc.setFontSize(18);
+        doc.setFont('helvetica', 'bold');
+        doc.text('JB Finance — Relatório de Receitas', 14, 20);
+
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(120);
+        doc.text(`Gerado em: ${format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}`, 14, 27);
+
+        // Active filters info
+        let filterY = 33;
+        const filterTexts: string[] = [];
+        if (filterDataInicio || filterDataFim) {
+            const ini = filterDataInicio ? format(new Date(filterDataInicio + 'T12:00:00'), 'dd/MM/yyyy') : 'início';
+            const fim = filterDataFim ? format(new Date(filterDataFim + 'T12:00:00'), 'dd/MM/yyyy') : 'hoje';
+            filterTexts.push(`Período: ${ini} a ${fim}`);
+        }
+        if (filterSetor) filterTexts.push(`Setor: ${filterSetor === 'ACOUQUE' ? 'Açougue' : 'Peixaria'}`);
+        if (filterCategoria) filterTexts.push(`Categoria: ${filterCategoria}`);
+        if (search) filterTexts.push(`Busca: "${search}"`);
+
+        if (filterTexts.length > 0) {
+            doc.setTextColor(80);
+            const wrappedText = doc.splitTextToSize(`Filtros: ${filterTexts.join(' | ')}`, pageWidth - 28);
+            doc.text(wrappedText, 14, filterY);
+            filterY += 6 * wrappedText.length;
+        }
+
+        // Table
+        const rows = filtered.map(r => [
+            format(new Date(r.data), 'dd/MM/yyyy', { locale: ptBR }),
+            r.setor === 'ACOUQUE' ? 'Açougue' : 'Peixaria',
+            r.categoria,
+            formatCurrency(r.valor),
+        ]);
+
+        autoTable(doc, {
+            startY: filterY + 2,
+            head: [['Data', 'Setor', 'Categoria', 'Valor']],
+            body: rows,
+            theme: 'striped',
+            headStyles: { fillColor: [17, 17, 24], textColor: [232, 232, 237], fontSize: 9, fontStyle: 'bold' },
+            bodyStyles: { fontSize: 8, textColor: [60, 60, 70] },
+            alternateRowStyles: { fillColor: [245, 245, 250] },
+            columnStyles: { 3: { halign: 'right', fontStyle: 'bold' } },
+            margin: { left: 14, right: 14 },
+        });
+
+        // Footer with totals
+        const finalY = (doc as any).lastAutoTable?.finalY || 200;
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(40);
+        doc.text(`Total: ${formatCurrency(totalValue)}`, pageWidth - 14, finalY + 10, { align: 'right' });
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(120);
+        doc.text(`${filtered.length} registro(s)`, 14, finalY + 10);
+
+        // Download com nome correto via anchor tag
+        const pdfArrayBuffer = doc.output('arraybuffer');
+        const pdfBlob = new Blob([pdfArrayBuffer], { type: 'application/pdf' });
+        const fileName = `receitas_${format(new Date(), 'yyyy-MM-dd')}.pdf`;
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    }
+
+
 
     return (
         <div className="space-y-6 animate-in fade-in duration-500">
@@ -257,15 +374,149 @@ export default function ReceitasPage() {
                 </Dialog>
             </div>
 
-            {/* Summary badge */}
-            <div className="flex items-center gap-3">
-                <div className="bg-success/10 text-success rounded-full px-4 py-1.5 text-[13px] font-semibold">
-                    Total: {formatCurrency(totalValue)}
+            {/* Summary badges + Actions */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-3">
+                    <div className="bg-success/10 text-success rounded-full px-4 py-1.5 text-[13px] font-semibold">
+                        Total: {formatCurrency(totalValue)}
+                    </div>
+                    <div className="bg-muted/50 text-muted-foreground rounded-full px-4 py-1.5 text-[13px]">
+                        {filtered.length} registro{filtered.length !== 1 ? 's' : ''}
+                    </div>
                 </div>
-                <div className="bg-muted/50 text-muted-foreground rounded-full px-4 py-1.5 text-[13px]">
-                    {filtered.length} registro{filtered.length !== 1 ? 's' : ''}
+                <div className="flex items-center gap-2">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowFilters(!showFilters)}
+                        className={`gap-2 text-[13px] ${hasActiveFilters ? 'border-primary/50 text-primary' : 'text-muted-foreground'}`}
+                    >
+                        <Filter className="w-3.5 h-3.5" />
+                        Filtros
+                        {hasActiveFilters && (
+                            <span className="bg-primary text-primary-foreground rounded-full w-5 h-5 text-[10px] font-bold flex items-center justify-center">
+                                {[filterDataInicio, filterDataFim, filterSetor, filterCategoria].filter(Boolean).length}
+                            </span>
+                        )}
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleExportPDF}
+                        disabled={filtered.length === 0}
+                        className="gap-2 text-[13px] text-muted-foreground disabled:opacity-40"
+                    >
+                        <FileDown className="w-3.5 h-3.5" />
+                        Exportar PDF
+                    </Button>
                 </div>
             </div>
+
+            {/* Advanced Filters Bar */}
+            {showFilters && (
+                <div className="glass-card rounded-xl p-4 border border-border animate-in slide-in-from-top-2 duration-300">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div className="grid gap-1.5">
+                            <Label className="text-[13px] text-muted-foreground">Data Início</Label>
+                            <Input
+                                type="date"
+                                value={filterDataInicio}
+                                onChange={(e) => { setFilterDataInicio(e.target.value); setPage(1); }}
+                                className="bg-muted/40 border-border/50 text-foreground h-9 text-[13px]"
+                            />
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label className="text-[13px] text-muted-foreground">Data Fim</Label>
+                            <Input
+                                type="date"
+                                value={filterDataFim}
+                                onChange={(e) => { setFilterDataFim(e.target.value); setPage(1); }}
+                                className="bg-muted/40 border-border/50 text-foreground h-9 text-[13px]"
+                            />
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label className="text-[13px] text-muted-foreground">Setor</Label>
+                            <Select value={filterSetor} onValueChange={(v) => { setFilterSetor(v === '__all__' ? '' : v); setPage(1); }}>
+                                <SelectTrigger className="bg-muted/40 border-border/50 text-foreground h-9 text-[13px]">
+                                    <SelectValue placeholder="Todos" />
+                                </SelectTrigger>
+                                <SelectContent className="bg-card border-border">
+                                    <SelectItem value="__all__">Todos</SelectItem>
+                                    <SelectItem value="ACOUQUE">Açougue</SelectItem>
+                                    <SelectItem value="PEIXARIA">Peixaria</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label className="text-[13px] text-muted-foreground">Categoria</Label>
+                            <Select value={filterCategoria} onValueChange={(v) => { setFilterCategoria(v === '__all__' ? '' : v); setPage(1); }}>
+                                <SelectTrigger className="bg-muted/40 border-border/50 text-foreground h-9 text-[13px]">
+                                    <SelectValue placeholder="Todas" />
+                                </SelectTrigger>
+                                <SelectContent className="bg-card border-border">
+                                    <SelectItem value="__all__">Todas</SelectItem>
+                                    {Object.values(CATEGORIAS_POR_SETOR).flat().filter((item, i, ar) => ar.indexOf(item) === i).sort().map(cat => (
+                                        <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+                    {hasActiveFilters && (
+                        <div className="flex justify-end mt-3">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={clearFilters}
+                                className="gap-1.5 text-[12px] text-muted-foreground hover:text-danger"
+                            >
+                                <X className="w-3.5 h-3.5" />
+                                Limpar Filtros
+                            </Button>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Active Removable Tags (UX Pro Max) */}
+            {hasActiveFilters && !showFilters && (
+                <div className="flex flex-wrap items-center gap-2 mb-4 animate-in fade-in duration-300">
+                    <span className="text-[12px] text-muted-foreground mr-1">Filtros ativos:</span>
+
+                    {(filterDataInicio || filterDataFim) && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-[12px] font-medium">
+                            <span className="max-w-[150px] truncate">
+                                Período: {filterDataInicio ? format(new Date(filterDataInicio + 'T12:00:00'), 'dd/MM/yyyy') : '...'} a {filterDataFim ? format(new Date(filterDataFim + 'T12:00:00'), 'dd/MM/yyyy') : '...'}
+                            </span>
+                            <button onClick={() => { setFilterDataInicio(''); setFilterDataFim(''); setPage(1); }} className="hover:text-foreground">
+                                <X className="w-3 h-3" />
+                            </button>
+                        </span>
+                    )}
+
+                    {filterSetor && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-[12px] font-medium">
+                            <span className="max-w-[150px] truncate">Setor: {filterSetor === 'ACOUQUE' ? 'Açougue' : 'Peixaria'}</span>
+                            <button onClick={() => { setFilterSetor(''); setPage(1); }} className="hover:text-foreground">
+                                <X className="w-3 h-3" />
+                            </button>
+                        </span>
+                    )}
+
+                    {filterCategoria && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-[12px] font-medium">
+                            <span className="max-w-[150px] truncate">Cat: {filterCategoria}</span>
+                            <button onClick={() => { setFilterCategoria(''); setPage(1); }} className="hover:text-foreground">
+                                <X className="w-3 h-3" />
+                            </button>
+                        </span>
+                    )}
+
+                    <Button variant="ghost" size="sm" onClick={clearFilters} className="h-6 text-[11px] text-muted-foreground hover:text-danger px-2 py-0 ml-1">
+                        Limpar todos
+                    </Button>
+                </div>
+            )}
 
             <Card>
                 <CardHeader>

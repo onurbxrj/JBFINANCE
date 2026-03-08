@@ -31,10 +31,10 @@ export default function DreAcouguePage() {
         let receita = 0, despesasSetor = 0;
         const despesasPorPlano: Record<string, number> = {};
 
-        receitas.forEach(r => { 
+        receitas.forEach(r => {
             const dDate = new Date(r.data + "T12:00:00");
             if (isSameMonth(dDate, currentDate) && r.setor === 'ACOUQUE') {
-                receita += r.valor; 
+                receita += r.valor;
             }
         });
 
@@ -144,7 +144,7 @@ export default function DreAcouguePage() {
                             ))}
                             <div className="p-4 px-6 flex justify-between items-center bg-background/20 font-bold text-lg">
                                 <span className="text-foreground">= Resultado Operacional</span>
-                                <span className={`financial-value ${dreData.resultado >= 0 ? 'text-gradient-neon text-xl' : 'text-danger text-xl'}`}>{formatCurrency(dreData.resultado)}</span>
+                                <span className={`financial-value ${dreData.resultado >= 0 ? 'text-gradient-accent text-xl' : 'text-danger text-xl'}`}>{formatCurrency(dreData.resultado)}</span>
                             </div>
                             <div className="p-3 px-6 text-right bg-muted/20">
                                 <span className={dreData.margem >= 0 ? "badge-glass-success" : "badge-glass-danger"}>

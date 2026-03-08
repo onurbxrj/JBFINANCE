@@ -107,7 +107,6 @@ export const deleteReceita = async (id: string) => {
 
 // Despesas
 export const getDespesas = async () => {
-    console.log("Fetching despesas...");
     const { data, error } = await supabase.from('despesas').select('*').order('data', { ascending: false });
     if (error) throw error;
     return data as Despesa[];
@@ -136,6 +135,16 @@ export const deleteDespesa = async (id: string) => {
     if (error) throw error;
     if (count === 0) throw new Error("Permissão negada ou registro inexistente.");
     return true;
+};
+
+/** Deleta múltiplas despesas e seus rateios associados (para desfazer importação) */
+export const deleteDespesasBulk = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    // Rateios são deletados via cascade ou manualmente
+    await supabase.from('rateio_despesas').delete().in('despesa_id', ids);
+    const { error, count } = await supabase.from('despesas').delete({ count: 'exact' }).in('id', ids);
+    if (error) throw error;
+    return count;
 };
 
 export const getRateiosDespesa = async (despesaId: string) => {

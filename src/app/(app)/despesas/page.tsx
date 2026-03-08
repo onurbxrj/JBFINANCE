@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import { getDespesas, addDespesa, updateDespesa, deleteDespesa, saveRateiosDespesa, getRateiosDespesa, getPlanosContas, getCategorias, addPlanoConta, addCategoria, addDespesasBulk, addRateiosBulk, Despesa, PlanoConta, Categoria } from "@/lib/api";
+import { useEffect, useState, useMemo, useCallback } from "react";
+import { getDespesas, addDespesa, updateDespesa, deleteDespesa, saveRateiosDespesa, getRateiosDespesa, getPlanosContas, getCategorias, addPlanoConta, addCategoria, addDespesasBulk, addRateiosBulk, deleteDespesasBulk, Despesa, PlanoConta, Categoria } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
-import { Edit2, Trash2, Plus, Search, ChevronLeft, ChevronRight, Upload, FileSpreadsheet } from "lucide-react";
-import * as xlsx from "xlsx";
+import { Edit2, Trash2, Plus, Search, ChevronLeft, ChevronRight, Upload, FileSpreadsheet, AlertTriangle, CheckCircle2, Undo2, Loader2, FileDown, Filter, X } from "lucide-react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { parseSpreadsheetFile, findDuplicates, generateRateios, ParsedDespesa, CENTRO_CUSTO_GERAL } from "@/lib/importExcel";
 import {
     Dialog,
     DialogContent,
@@ -45,12 +45,39 @@ export default function DespesasPage() {
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
     const [importErrors, setImportErrors] = useState<string[]>([]);
+    const [importPreview, setImportPreview] = useState<ParsedDespesa[]>([]);
+    const [importDuplicates, setImportDuplicates] = useState<number[]>([]);
+    const [importNewPlanos, setImportNewPlanos] = useState<string[]>([]);
+    const [importNewCats, setImportNewCats] = useState<string[]>([]);
+    const [importStep, setImportStep] = useState<'upload' | 'preview' | 'success'>('upload');
+    const [lastImportedIds, setLastImportedIds] = useState<string[]>([]);
+    const [importSummary, setImportSummary] = useState<{ total: number; valor: number; porCentro: Record<string, { count: number; valor: number }> } | null>(null);
+    const [importProgress, setImportProgress] = useState(0);
     const { role, userId } = useAuth();
 
     // Search & Pagination
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(1);
     const perPage = 10;
+
+    // Advanced Filters
+    const [filterDataInicio, setFilterDataInicio] = useState('');
+    const [filterDataFim, setFilterDataFim] = useState('');
+    const [filterPlano, setFilterPlano] = useState('');
+    const [filterCategoria, setFilterCategoria] = useState('');
+    const [filterCentroCusto, setFilterCentroCusto] = useState('');
+    const [showFilters, setShowFilters] = useState(false);
+
+    const hasActiveFilters = filterDataInicio || filterDataFim || filterPlano || filterCategoria || filterCentroCusto;
+
+    function clearFilters() {
+        setFilterDataInicio('');
+        setFilterDataFim('');
+        setFilterPlano('');
+        setFilterCategoria('');
+        setFilterCentroCusto('');
+        setPage(1);
+    }
 
     // Form State
     const [data, setData] = useState(new Date().toISOString().split("T")[0]);
@@ -243,6 +270,20 @@ export default function DespesasPage() {
         }
     }
 
+    /** Reseta todo o estado de importação */
+    function resetImportState() {
+        setImportErrors([]);
+        setImportPreview([]);
+        setImportDuplicates([]);
+        setImportNewPlanos([]);
+        setImportNewCats([]);
+        setImportStep('upload');
+        setIsImporting(false);
+        setImportProgress(0);
+        setImportSummary(null);
+    }
+
+    /** Etapa 1: Faz parsing do arquivo e mostra a pré-visualização */
     async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -252,244 +293,150 @@ export default function DespesasPage() {
 
         try {
             const buffer = await file.arrayBuffer();
-            const workbook = xlsx.read(buffer);
-            const sheet = workbook.Sheets[workbook.SheetNames[0]];
-            const jsonData = xlsx.utils.sheet_to_json(sheet);
+            const ext = file.name.split('.').pop()?.toLowerCase() || 'xlsx';
+            const result = parseSpreadsheetFile(buffer, planosContasOpts, categoriasOpts, userId || undefined, ext);
 
-            let errors: string[] = [];
-            let despesasParaSalvar: any[] = [];
-
-            let currentPlanos = [...planosContasOpts];
-            let currentCats = [...categoriasOpts];
-            
-            // 1. Rastreador Dinâmico de Cabeçalhos
-            // Procurar qual linha possui "DATA" e "VALOR"
-            let headerRowIndex = -1;
-            let colMap = { data: '', valor: '', ccust: '', plano: '', cat: '', desc: '', obs: '' };
-
-            const rawData = xlsx.utils.sheet_to_json(sheet, { header: 1 }); // Matrix raw
-            
-            for (let i = 0; i < rawData.length; i++) {
-                const row: any = rawData[i];
-                if (!Array.isArray(row)) continue;
-                const concatRow = row.map(c => String(c).toLowerCase().trim()).join('|');
-                if (concatRow.includes('data') && concatRow.includes('valor')) {
-                    headerRowIndex = i;
-                    // Mapear headers
-                    row.forEach((cell: any, cIdx: number) => {
-                        const cName = String(cell).toLowerCase().trim().replace(/[\u0300-\u036f]/g, '');
-                        if (cName.includes('data')) colMap.data = cIdx.toString();
-                        else if (cName === 'valor') colMap.valor = cIdx.toString();
-                        else if (cName.includes('centro') || cName.includes('setor')) colMap.ccust = cIdx.toString();
-                        else if (cName.includes('plano')) colMap.plano = cIdx.toString();
-                        else if (cName.includes('cat')) colMap.cat = cIdx.toString();
-                        else if (cName.includes('desc')) colMap.desc = cIdx.toString();
-                        else if (cName.includes('obs')) colMap.obs = cIdx.toString();
-                    });
-                    break;
-                }
-            }
-
-            if (headerRowIndex === -1) {
-                setImportErrors(['Não foi possível identificar os Cabeçalhos reais (Data, Valor, etc) na planilha.']);
+            if (result.errors.length > 0) {
+                setImportErrors(result.errors);
                 setIsImporting(false);
                 return;
             }
 
-            // Memória de herança (para preencher campos vazios da mesma data)
-            let lastData = "";
-            let lastCat = "Indefinido";
-            let lastCcust = "Geral / Loja";
-            let lastPlano = "Geral";
-
-            for (let index = headerRowIndex + 1; index < rawData.length; index++) {
-                const row: any = rawData[index];
-                const linha = index + 1;
-                
-                // Pular linhas vazias puras
-                if (!row || row.length === 0 || row.join('').trim() === '') continue;
-
-                // Extrair valores usando mapeamento
-                let valData = row[colMap.data as any];
-                const valValor = row[colMap.valor as any];
-                let valCentroCusto = row[colMap.ccust as any] || lastCcust;
-                let valPlano = row[colMap.plano as any] || lastPlano;
-                let valCat = row[colMap.cat as any] || lastCat;
-                const valDesc = row[colMap.desc as any];
-                const valObs = colMap.obs ? row[colMap.obs as any] : "";
-
-                // Se a linha não tem valor ou descrição principais salvas após header, apenas pula (linha não computável)
-                if (valValor === undefined || valValor === null || valValor === '') {
-                    continue; 
-                }
-
-                if (valData === undefined || valData === null || valData === '') {
-                    if (lastData) valData = lastData;
-                    else {
-                        errors.push(`Linha ${linha}: Data não definida e sem data anterior para herdar.`);
-                        continue;
-                    }
-                }
-
-                // Normalização Case-Insensitive: Plano de Contas
-                let planoOficial = "";
-                const planoStr = String(valPlano).trim() || 'Geral';
-                const planoMatch = currentPlanos.find(p => p.nome.toLowerCase() === planoStr.toLowerCase());
-                
-                if (planoMatch) {
-                    planoOficial = planoMatch.nome;
-                } else {
-                    if (role === 'diretor') {
-                        try {
-                            const newP = await addPlanoConta(planoStr);
-                            currentPlanos.push(newP);
-                            planoOficial = newP.nome;
-                        } catch (e) {
-                            errors.push(`Linha ${linha}: Erro ao criar novo Plano de Contas '${planoStr}'.`);
-                            continue;
-                        }
-                    } else {
-                        errors.push(`Linha ${linha}: Plano de Contas '${planoStr}' não existe. Mude para 'Operacional' ou consulte o diretor.`);
-                        continue;
-                    }
-                }
-
-                // Normalização Case-Insensitive: Categoria
-                let catOficial = "";
-                const catStr = String(valCat).trim() || 'Geral';
-                const catMatch = currentCats.find(c => c.nome.toLowerCase() === catStr.toLowerCase());
-
-                if (catMatch) {
-                    catOficial = catMatch.nome;
-                } else {
-                    if (role === 'diretor') {
-                        try {
-                            const newC = await addCategoria(catStr);
-                            currentCats.push(newC);
-                            catOficial = newC.nome;
-                        } catch (e) {
-                            errors.push(`Linha ${linha}: Erro ao criar nova Categoria '${catStr}'.`);
-                            continue;
-                        }
-                    } else {
-                        errors.push(`Linha ${linha}: Categoria '${catStr}' não existe no sistema.`);
-                        continue;
-                    }
-                }
-
-                // Tratar data (Excel serial date to YYYY-MM-DD ou string já formatada)
-                let dataFormatada = "";
-                if (typeof valData === "number") {
-                    const dateObj = new Date((valData - (25567 + 1)) * 86400 * 1000); 
-                    dataFormatada = dateObj.toISOString().split("T")[0];
-                } else {
-                    const strData = String(valData);
-                    if (strData.includes("/")) {
-                        const partes = strData.split("/");
-                        if (partes.length === 3) {
-                            dataFormatada = `${partes[2]}-${partes[1].padStart(2, '0')}-${partes[0].padStart(2, '0')}`;
-                        } else {
-                            dataFormatada = strData;
-                        }
-                    } else {
-                        dataFormatada = strData;
-                    }
-                }
-
-                // Tratar valor
-                let valorTratado = 0;
-                if (typeof valValor === "string") {
-                     valorTratado = parseFloat(valValor.replace('R$', '').replace(/\./g, '').replace(',', '.').trim());
-                } else if (typeof valValor === "number") {
-                     valorTratado = valValor;
-                }
-                
-                if (isNaN(valorTratado) || valorTratado < 0) {
-                     errors.push(`Linha ${linha}: Valor financeiro inválido '${valValor}'.`);
-                     continue;
-                }
-
-                // Normalizar o Centro de Custo para bater com os Selectors (Açougue, Peixaria, Geral / Loja)
-                let rawCcust = String(valCentroCusto).toLowerCase().trim();
-                let ccustNormalizado = "Geral / Loja";
-                if (rawCcust.includes('açougue') || rawCcust.includes('acougue')) {
-                    ccustNormalizado = "Açougue";
-                } else if (rawCcust.includes('peix') || rawCcust.includes('peixaria')) {
-                    ccustNormalizado = "Peixaria";
-                }
-
-                // Atualizar memórias
-                lastData = valData;
-                lastPlano = String(valPlano).trim();
-                lastCat = String(valCat).trim();
-                lastCcust = ccustNormalizado;
-
-                let tipoRateio = "nenhum";
-                if (ccustNormalizado === "Geral / Loja") {
-                    tipoRateio = "percentual";
-                }
-
-                despesasParaSalvar.push({
-                    data: dataFormatada,
-                    valor: valorTratado,
-                    centro_custo: lastCcust,
-                    plano_contas: planoOficial,
-                    categoria: catOficial,
-                    descricao: String(valDesc || '').trim() || 'Despesa não especificada',
-                    observacao: String(valObs || '').trim(),
-                    tipo_rateio: tipoRateio,
-                    created_by: userId || undefined
-                });
-            }
-
-            // Atualiza o estado da tabela se novos registros foram criados
-            if (currentPlanos.length > planosContasOpts.length) setPlanosContasOpts([...currentPlanos]);
-            if (currentCats.length > categoriasOpts.length) setCategoriasOpts([...currentCats]);
-
-            if (errors.length > 0) {
-                setImportErrors(errors);
+            if (result.despesas.length === 0) {
+                setImportErrors(["Nenhum dado válido encontrado na planilha."]);
+                setIsImporting(false);
                 return;
             }
 
-            if (despesasParaSalvar.length === 0) {
-                 setImportErrors(["Nenhum dado válido encontrado na planilha."]);
-                 return;
-            }
+            const { duplicates, unique } = findDuplicates(result.despesas, despesas);
 
-            const savedDespesas = await addDespesasBulk(despesasParaSalvar);
-
-            // Gerar rateios automaticamente se necessário
-            const rateiosToSave: any[] = [];
-            if (savedDespesas && Array.isArray(savedDespesas)) {
-                savedDespesas.forEach((d: any) => {
-                    if (d.tipo_rateio === "percentual" && d.centro_custo === "Geral / Loja") {
-                        rateiosToSave.push({
-                            despesa_id: d.id,
-                            setor: "Açougue",
-                            percentual: 66.66
-                        });
-                        rateiosToSave.push({
-                            despesa_id: d.id,
-                            setor: "Peixaria",
-                            percentual: 33.34
-                        });
-                    }
-                });
-            }
-
-            if (rateiosToSave.length > 0) {
-                 await addRateiosBulk(rateiosToSave);
-            }
-
-            setIsImportModalOpen(false);
-            alert(`${despesasParaSalvar.length} despesa(s) importada(s) com sucesso!`);
-            loadData();
-        } catch (error: any) {
-            console.error(error);
-            setImportErrors([`Erro no processo (${error.message || 'Desconhecido'}): verifique o log.`]);
+            setImportPreview(unique);
+            setImportDuplicates(duplicates);
+            setImportNewPlanos(result.newPlanos);
+            setImportNewCats(result.newCategorias);
+            setImportStep('preview');
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : 'Desconhecido';
+            setImportErrors([`Erro ao processar arquivo (${msg}): verifique o formato.`]);
         } finally {
             setIsImporting(false);
-            e.target.value = ''; // Reset file input
+            e.target.value = '';
+        }
+    }
+
+    /** Etapa 2: Confirma e salva as despesas após pré-visualização */
+    async function handleConfirmImport() {
+        if (importPreview.length === 0) return;
+
+        setIsImporting(true);
+        setImportErrors([]);
+        setImportProgress(10);
+
+        try {
+            // Criar Planos de Contas novos
+            let updatedPlanos = [...planosContasOpts];
+            for (const planoName of importNewPlanos) {
+                const exists = updatedPlanos.find(p => p.nome.toLowerCase() === planoName.toLowerCase());
+                if (!exists) {
+                    try {
+                        const newP = await addPlanoConta(planoName);
+                        updatedPlanos.push(newP);
+                    } catch {
+                        setImportErrors(prev => [...prev, `Erro ao criar Plano '${planoName}'.`]);
+                    }
+                }
+            }
+            setImportProgress(25);
+
+            // Criar Categorias novas
+            let updatedCats = [...categoriasOpts];
+            for (const catName of importNewCats) {
+                const exists = updatedCats.find(c => c.nome.toLowerCase() === catName.toLowerCase());
+                if (!exists) {
+                    try {
+                        const newC = await addCategoria(catName);
+                        updatedCats.push(newC);
+                    } catch {
+                        setImportErrors(prev => [...prev, `Erro ao criar Categoria '${catName}'.`]);
+                    }
+                }
+            }
+            setImportProgress(40);
+
+            // Atualizar referências
+            const finalDespesas = importPreview.map(d => {
+                const planoRef = updatedPlanos.find(p => p.nome.toLowerCase() === d.plano_contas.toLowerCase());
+                const catRef = updatedCats.find(c => c.nome.toLowerCase() === d.categoria.toLowerCase());
+                return {
+                    ...d,
+                    plano_contas: planoRef?.nome || d.plano_contas,
+                    categoria: catRef?.nome || d.categoria,
+                };
+            });
+            setImportProgress(50);
+
+            // Inserir despesas em lote
+            const savedDespesas = await addDespesasBulk(finalDespesas);
+            setImportProgress(75);
+
+            // Gerar e inserir rateios
+            let savedIds: string[] = [];
+            if (savedDespesas && Array.isArray(savedDespesas)) {
+                savedIds = savedDespesas.map((d: Despesa) => d.id!).filter(Boolean);
+                const rateios = generateRateios(savedDespesas as Despesa[]);
+                if (rateios.length > 0) {
+                    await addRateiosBulk(rateios);
+                }
+            }
+            setImportProgress(90);
+
+            // Atualizar opções locais
+            if (updatedPlanos.length > planosContasOpts.length) setPlanosContasOpts([...updatedPlanos]);
+            if (updatedCats.length > categoriasOpts.length) setCategoriasOpts([...updatedCats]);
+
+            // Gerar resumo por centro de custo
+            const porCentro: Record<string, { count: number; valor: number }> = {};
+            for (const d of finalDespesas) {
+                if (!porCentro[d.centro_custo]) porCentro[d.centro_custo] = { count: 0, valor: 0 };
+                porCentro[d.centro_custo].count++;
+                porCentro[d.centro_custo].valor += d.valor;
+            }
+
+            setImportSummary({
+                total: finalDespesas.length,
+                valor: finalDespesas.reduce((a, d) => a + d.valor, 0),
+                porCentro,
+            });
+            setLastImportedIds(savedIds);
+            setImportProgress(100);
+            setImportStep('success');
+            loadData();
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : 'Desconhecido';
+            setImportErrors([`Erro no envio (${msg}): verifique o log.`]);
+        } finally {
+            setIsImporting(false);
+        }
+    }
+
+    /** Desfaz a última importação removendo todas as despesas inseridas */
+    async function handleUndoImport() {
+        if (lastImportedIds.length === 0) return;
+        if (!window.confirm(`Deseja realmente desfazer a importação e excluir ${lastImportedIds.length} despesa(s)?`)) return;
+
+        try {
+            setIsImporting(true);
+            await deleteDespesasBulk(lastImportedIds);
+            setLastImportedIds([]);
+            setIsImportModalOpen(false);
+            resetImportState();
+            alert(`Importação desfeita com sucesso.`);
+            loadData();
+        } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : 'Desconhecido';
+            alert(`Erro ao desfazer: ${msg}`);
+        } finally {
+            setIsImporting(false);
         }
     }
 
@@ -498,13 +445,116 @@ export default function DespesasPage() {
     // Filtered + paginated
     const filtered = useMemo(() => {
         const q = search.toLowerCase();
-        return despesas.filter(d =>
-            d.categoria.toLowerCase().includes(q) ||
-            d.centro_custo.toLowerCase().includes(q) ||
-            d.descricao.toLowerCase().includes(q) ||
-            d.data.includes(q)
-        );
-    }, [despesas, search]);
+        return despesas.filter(d => {
+            // Text search
+            if (q && !(
+                d.categoria.toLowerCase().includes(q) ||
+                d.centro_custo.toLowerCase().includes(q) ||
+                d.descricao.toLowerCase().includes(q) ||
+                d.data.includes(q)
+            )) return false;
+
+            // Date range filter
+            const dDate = d.data.split('T')[0];
+            if (filterDataInicio && dDate < filterDataInicio) return false;
+            if (filterDataFim && dDate > filterDataFim) return false;
+
+            // Plano de contas filter
+            if (filterPlano && d.plano_contas !== filterPlano) return false;
+
+            // Categoria filter
+            if (filterCategoria && d.categoria !== filterCategoria) return false;
+
+            // Centro de Custo filter
+            if (filterCentroCusto && d.centro_custo !== filterCentroCusto) return false;
+
+            return true;
+        });
+    }, [despesas, search, filterDataInicio, filterDataFim, filterPlano, filterCategoria, filterCentroCusto]);
+
+    /** Exporta os dados filtrados em PDF */
+    async function handleExportPDF() {
+        const { default: jsPDF } = await import('jspdf');
+        const { default: autoTable } = await import('jspdf-autotable');
+
+        const doc = new jsPDF('landscape', 'mm', 'a4');
+        const pageWidth = doc.internal.pageSize.getWidth();
+
+        // Header
+        doc.setFontSize(18);
+        doc.setFont('helvetica', 'bold');
+        doc.text('JB Finance — Relatório de Despesas', 14, 20);
+
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(120);
+        doc.text(`Gerado em: ${format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}`, 14, 27);
+
+        // Active filters info
+        let filterY = 33;
+        const filterTexts: string[] = [];
+        if (filterDataInicio || filterDataFim) {
+            const ini = filterDataInicio ? format(new Date(filterDataInicio + 'T12:00:00'), 'dd/MM/yyyy') : 'início';
+            const fim = filterDataFim ? format(new Date(filterDataFim + 'T12:00:00'), 'dd/MM/yyyy') : 'hoje';
+            filterTexts.push(`Período: ${ini} a ${fim}`);
+        }
+        if (filterPlano) filterTexts.push(`Plano: ${filterPlano}`);
+        if (filterCategoria) filterTexts.push(`Categoria: ${filterCategoria}`);
+        if (filterCentroCusto) filterTexts.push(`C.Custo: ${filterCentroCusto}`);
+        if (search) filterTexts.push(`Busca: "${search}"`);
+
+        if (filterTexts.length > 0) {
+            doc.setTextColor(80);
+            doc.text(`Filtros: ${filterTexts.join(' | ')}`, 14, filterY);
+            filterY += 6;
+        }
+
+        // Table
+        const rows = filtered.map(d => [
+            format(new Date(d.data), 'dd/MM/yyyy', { locale: ptBR }),
+            d.centro_custo,
+            d.plano_contas,
+            d.categoria,
+            d.descricao.length > 40 ? d.descricao.slice(0, 40) + '...' : d.descricao,
+            formatCurrency(d.valor),
+        ]);
+
+        autoTable(doc, {
+            startY: filterY + 2,
+            head: [['Data', 'C.Custo', 'P.Contas', 'Categoria', 'Descrição', 'Valor']],
+            body: rows,
+            theme: 'striped',
+            headStyles: { fillColor: [17, 17, 24], textColor: [232, 232, 237], fontSize: 9, fontStyle: 'bold' },
+            bodyStyles: { fontSize: 8, textColor: [60, 60, 70] },
+            alternateRowStyles: { fillColor: [245, 245, 250] },
+            columnStyles: { 5: { halign: 'right', fontStyle: 'bold' } },
+            margin: { left: 14, right: 14 },
+        });
+
+        // Footer with totals
+        const finalY = (doc as any).lastAutoTable?.finalY || 200;
+        doc.setFontSize(11);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(40);
+        doc.text(`Total: ${formatCurrency(totalValue)}`, pageWidth - 14, finalY + 10, { align: 'right' });
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(120);
+        doc.text(`${filtered.length} registro(s)`, 14, finalY + 10);
+
+        // Download com nome correto via anchor tag (criação explícita de Blob para evitar hash em Chromium)
+        const pdfArrayBuffer = doc.output('arraybuffer');
+        const pdfBlob = new Blob([pdfArrayBuffer], { type: 'application/pdf' });
+        const fileName = `despesas_${format(new Date(), 'yyyy-MM-dd')}.pdf`;
+        const url = URL.createObjectURL(pdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    }
 
     const paginated = filtered.slice((page - 1) * perPage, page * perPage);
     const totalPages = Math.ceil(filtered.length / perPage);
@@ -520,61 +570,244 @@ export default function DespesasPage() {
                     <h1 className="text-2xl font-bold tracking-tight text-foreground">Despesas</h1>
                     <p className="text-[13px] text-muted-foreground mt-1">Gerencie despesas, rateios e centros de custo</p>
                 </div>
-                
+
                 <div className="flex items-center gap-2">
-                    <Dialog open={isImportModalOpen} onOpenChange={setIsImportModalOpen}>
-                        <DialogTrigger asChild>
-                            <Button variant="outline" className="bg-card text-foreground border-border hover:bg-muted/50 gap-2 font-medium">
-                                <Upload className="w-4 h-4" />
-                                <span className="hidden sm:inline">Importar</span>
-                            </Button>
-                        </DialogTrigger>
-                        <DialogContent className="sm:max-w-[460px] bg-card border-border">
-                            <DialogHeader>
-                                <DialogTitle className="text-foreground">Importar Despesas</DialogTitle>
-                                <DialogDescription className="text-muted-foreground text-[13px]">
-                                    Faça upload de uma planilha do Excel para importar despesas em lote.
-                                </DialogDescription>
-                            </DialogHeader>
-                            <div className="space-y-4 pt-2">
-                                <div className="p-4 bg-muted/30 border border-border/50 rounded-xl flex items-center gap-3">
-                                    <FileSpreadsheet className="w-8 h-8 text-primary/80" />
-                                    <div className="text-[13px]">
-                                        <p className="text-foreground font-medium">Precisa do modelo?</p>
-                                        <a href="/template-despesas.xlsx" download className="text-primary hover:underline">
-                                            Baixar template preenchível
-                                        </a>
-                                    </div>
-                                </div>
-                                
+                    {/* Botão de Importar — somente para Diretor */}
+                    {role === 'diretor' && (
+                        <Dialog open={isImportModalOpen} onOpenChange={(open) => { setIsImportModalOpen(open); if (!open) resetImportState(); }}>
+                            <DialogTrigger asChild>
+                                <Button variant="outline" className="bg-card text-foreground border-border hover:bg-muted/50 gap-2 font-medium">
+                                    <Upload className="w-4 h-4" />
+                                    <span className="hidden sm:inline">Importar</span>
+                                </Button>
+                            </DialogTrigger>
+                            <DialogContent className={`bg-card border-border ${importStep === 'preview' || importStep === 'success' ? 'sm:max-w-[700px]' : 'sm:max-w-[460px]'}`}>
+                                <DialogHeader>
+                                    <DialogTitle className="text-foreground">
+                                        {importStep === 'upload' && 'Importar Despesas'}
+                                        {importStep === 'preview' && 'Pré-visualização da Importação'}
+                                        {importStep === 'success' && '✅ Importação Concluída'}
+                                    </DialogTitle>
+                                    <DialogDescription className="text-muted-foreground text-[13px]">
+                                        {importStep === 'upload' && 'Faça upload de uma planilha Excel ou CSV para importar despesas em lote.'}
+                                        {importStep === 'preview' && 'Confira os dados abaixo antes de confirmar a importação.'}
+                                        {importStep === 'success' && 'Todas as despesas foram salvas com sucesso.'}
+                                    </DialogDescription>
+                                </DialogHeader>
+
+                                {/* Erros */}
                                 {importErrors.length > 0 && (
                                     <div className="p-3 bg-danger/10 border border-danger/20 rounded-lg text-[13px] text-danger/90 max-h-32 overflow-y-auto">
                                         <p className="font-semibold mb-1">Encontramos os seguintes problemas:</p>
                                         <ul className="list-disc pl-4 space-y-1">
-                                            {importErrors.map((err, i) => <li key={i}>{ err }</li>)}
+                                            {importErrors.map((err, i) => <li key={i}>{err}</li>)}
                                         </ul>
                                     </div>
                                 )}
 
-                                <div className="grid gap-2">
-                                    <Label className={labelClasses}>Selecione o arquivo (.xlsx, .csv)</Label>
-                                    <Input 
-                                        type="file" 
-                                        accept=".xlsx, .xls, .csv" 
-                                        onChange={handleFileUpload} 
-                                        disabled={isImporting}
-                                        className="bg-muted/40 border-border/50 text-foreground cursor-pointer file:text-foreground file:bg-muted file:border-0 file:mr-4 file:py-1 file:px-3 file:rounded-md hover:file:bg-muted/80" 
-                                    />
-                                </div>
-                                
-                                {isImporting && (
-                                    <p className="text-[13px] text-center text-muted-foreground py-2 animate-pulse">
-                                        Processando arquivo e enviando...
-                                    </p>
+                                {/* Etapa 1: Upload */}
+                                {importStep === 'upload' && (
+                                    <div className="space-y-4 pt-2">
+                                        <div className="p-4 bg-muted/30 border border-border/50 rounded-xl flex items-center gap-3">
+                                            <FileSpreadsheet className="w-8 h-8 text-primary/80" />
+                                            <div className="text-[13px]">
+                                                <p className="text-foreground font-medium">Precisa do modelo?</p>
+                                                <a href="/template-despesas.xlsx" download className="text-primary hover:underline">
+                                                    Baixar template preenchível
+                                                </a>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid gap-2">
+                                            <Label className={labelClasses}>Selecione o arquivo (.xlsx)</Label>
+                                            <Input
+                                                type="file"
+                                                accept=".xlsx, .xls"
+                                                onChange={handleFileUpload}
+                                                disabled={isImporting}
+                                                className="bg-muted/40 border-border/50 text-foreground cursor-pointer file:text-foreground file:bg-muted file:border-0 file:mr-4 file:py-1 file:px-3 file:rounded-md hover:file:bg-muted/80"
+                                            />
+                                        </div>
+
+                                        {isImporting && (
+                                            <p className="text-[13px] text-center text-muted-foreground py-2 animate-pulse">
+                                                Processando arquivo...
+                                            </p>
+                                        )}
+                                    </div>
                                 )}
-                            </div>
-                        </DialogContent>
-                    </Dialog>
+
+                                {/* Etapa 2: Pré-visualização */}
+                                {importStep === 'preview' && (
+                                    <div className="space-y-4 pt-2">
+                                        {/* Resumo */}
+                                        <div className="grid grid-cols-3 gap-3">
+                                            <div className="p-3 bg-primary/10 border border-primary/20 rounded-xl text-center">
+                                                <p className="text-lg font-bold text-primary">{importPreview.length}</p>
+                                                <p className="text-[11px] text-muted-foreground">Despesas válidas</p>
+                                            </div>
+                                            <div className="p-3 bg-success/10 border border-success/20 rounded-xl text-center">
+                                                <p className="text-lg font-bold text-success">
+                                                    {formatCurrency(importPreview.reduce((acc, d) => acc + d.valor, 0))}
+                                                </p>
+                                                <p className="text-[11px] text-muted-foreground">Valor total</p>
+                                            </div>
+                                            <div className="p-3 bg-danger/10 border border-danger/20 rounded-xl text-center">
+                                                <p className="text-lg font-bold text-danger">{importDuplicates.length}</p>
+                                                <p className="text-[11px] text-muted-foreground">Duplicatas removidas</p>
+                                            </div>
+                                        </div>
+
+                                        {/* Avisos de novos planos/categorias */}
+                                        {(importNewPlanos.length > 0 || importNewCats.length > 0) && (
+                                            <div className="p-3 bg-primary/5 border border-primary/20 rounded-lg text-[13px] text-foreground">
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <AlertTriangle className="w-4 h-4 text-primary" />
+                                                    <span className="font-semibold">Serão criados automaticamente:</span>
+                                                </div>
+                                                {importNewPlanos.length > 0 && (
+                                                    <p className="text-muted-foreground ml-6">Planos: {importNewPlanos.join(', ')}</p>
+                                                )}
+                                                {importNewCats.length > 0 && (
+                                                    <p className="text-muted-foreground ml-6">Categorias: {importNewCats.join(', ')}</p>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {importDuplicates.length > 0 && (
+                                            <div className="p-3 bg-danger/5 border border-danger/20 rounded-lg text-[13px] text-muted-foreground">
+                                                <div className="flex items-center gap-2">
+                                                    <AlertTriangle className="w-4 h-4 text-danger" />
+                                                    <span>{importDuplicates.length} linha(s) removida(s) por duplicidade (data + descrição + valor + centro custo).</span>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Tabela de pré-visualização */}
+                                        <div className="rounded-xl border border-border overflow-hidden max-h-[300px] overflow-y-auto">
+                                            <Table>
+                                                <TableHeader>
+                                                    <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                                        <TableHead className="text-[11px] font-semibold uppercase text-muted-foreground">Data</TableHead>
+                                                        <TableHead className="text-[11px] font-semibold uppercase text-muted-foreground">C.Custo</TableHead>
+                                                        <TableHead className="text-[11px] font-semibold uppercase text-muted-foreground">Descrição</TableHead>
+                                                        <TableHead className="text-right text-[11px] font-semibold uppercase text-muted-foreground">Valor</TableHead>
+                                                    </TableRow>
+                                                </TableHeader>
+                                                <TableBody>
+                                                    {importPreview.slice(0, 50).map((d, i) => (
+                                                        <TableRow key={i} className="hover:bg-muted/20 even:bg-muted/10">
+                                                            <TableCell className="text-[12px] text-foreground">{d.data}</TableCell>
+                                                            <TableCell className="text-[12px] text-muted-foreground">{d.centro_custo}</TableCell>
+                                                            <TableCell className="text-[12px] text-muted-foreground max-w-[180px] truncate">{d.descricao}</TableCell>
+                                                            <TableCell className="text-right text-[12px] text-danger font-semibold financial-value">{formatCurrency(d.valor)}</TableCell>
+                                                        </TableRow>
+                                                    ))}
+                                                </TableBody>
+                                            </Table>
+                                            {importPreview.length > 50 && (
+                                                <p className="text-[11px] text-muted-foreground text-center py-2">... e mais {importPreview.length - 50} linhas</p>
+                                            )}
+                                        </div>
+
+                                        {/* Botões de ação */}
+                                        <div className="flex justify-end gap-2 pt-2">
+                                            <Button type="button" variant="ghost" onClick={() => resetImportState()} className="text-muted-foreground hover:text-foreground">
+                                                Voltar
+                                            </Button>
+                                            <Button
+                                                onClick={handleConfirmImport}
+                                                disabled={isImporting || importPreview.length === 0}
+                                                className="text-black font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20 gap-2"
+                                            >
+                                                {isImporting ? (
+                                                    <span className="flex items-center gap-2">
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                        Importando... {importProgress}%
+                                                    </span>
+                                                ) : (
+                                                    <>
+                                                        <CheckCircle2 className="w-4 h-4" />
+                                                        Confirmar Importação ({importPreview.length})
+                                                    </>
+                                                )}
+                                            </Button>
+                                        </div>
+
+                                        {/* Progress bar */}
+                                        {isImporting && importProgress > 0 && (
+                                            <div className="w-full bg-muted/50 rounded-full h-2 overflow-hidden">
+                                                <div
+                                                    className="h-full bg-primary rounded-full transition-all duration-500 ease-out"
+                                                    style={{ width: `${importProgress}%` }}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Etapa 3: Sucesso + Resumo */}
+                                {importStep === 'success' && importSummary && (
+                                    <div className="space-y-4 pt-2">
+                                        {/* Resumo geral */}
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div className="p-4 bg-success/10 border border-success/20 rounded-xl text-center">
+                                                <p className="text-2xl font-bold text-success">{importSummary.total}</p>
+                                                <p className="text-[11px] text-muted-foreground">Despesas importadas</p>
+                                            </div>
+                                            <div className="p-4 bg-primary/10 border border-primary/20 rounded-xl text-center">
+                                                <p className="text-2xl font-bold text-primary">{formatCurrency(importSummary.valor)}</p>
+                                                <p className="text-[11px] text-muted-foreground">Valor total</p>
+                                            </div>
+                                        </div>
+
+                                        {/* Breakdown por centro de custo */}
+                                        <div className="rounded-xl border border-border overflow-hidden">
+                                            <Table>
+                                                <TableHeader>
+                                                    <TableRow className="bg-muted/30 hover:bg-muted/30">
+                                                        <TableHead className="text-[11px] font-semibold uppercase text-muted-foreground">Centro de Custo</TableHead>
+                                                        <TableHead className="text-center text-[11px] font-semibold uppercase text-muted-foreground">Qtd</TableHead>
+                                                        <TableHead className="text-right text-[11px] font-semibold uppercase text-muted-foreground">Valor</TableHead>
+                                                    </TableRow>
+                                                </TableHeader>
+                                                <TableBody>
+                                                    {Object.entries(importSummary.porCentro).map(([centro, info]) => (
+                                                        <TableRow key={centro} className="hover:bg-muted/20">
+                                                            <TableCell className="text-[12px] text-foreground font-medium">{centro}</TableCell>
+                                                            <TableCell className="text-center text-[12px] text-muted-foreground">{info.count}</TableCell>
+                                                            <TableCell className="text-right text-[12px] text-danger font-semibold financial-value">{formatCurrency(info.valor)}</TableCell>
+                                                        </TableRow>
+                                                    ))}
+                                                </TableBody>
+                                            </Table>
+                                        </div>
+
+                                        {/* Botões de Desfazer e Fechar */}
+                                        <div className="flex justify-between pt-2">
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                onClick={handleUndoImport}
+                                                disabled={isImporting || lastImportedIds.length === 0}
+                                                className="text-danger hover:text-danger hover:bg-danger/10 gap-2"
+                                            >
+                                                <Undo2 className="w-4 h-4" />
+                                                Desfazer Importação
+                                            </Button>
+                                            <Button
+                                                onClick={() => { setIsImportModalOpen(false); resetImportState(); }}
+                                                className="text-black font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20 gap-2"
+                                            >
+                                                <CheckCircle2 className="w-4 h-4" />
+                                                Fechar
+                                            </Button>
+                                        </div>
+                                    </div>
+                                )}
+                            </DialogContent>
+                        </Dialog>
+                    )}
 
                     <Dialog open={isOpen} onOpenChange={handleCloseModal}>
                         <DialogTrigger asChild>
@@ -583,144 +816,144 @@ export default function DespesasPage() {
                                 <span className="hidden sm:inline">Nova Despesa</span>
                             </Button>
                         </DialogTrigger>
-                    <DialogContent className="sm:max-w-[520px] bg-card border-border max-h-[90vh] overflow-y-auto">
-                        <DialogHeader>
-                            <DialogTitle className="text-foreground">{editingId ? "Editar Despesa" : "Registrar Nova Despesa"}</DialogTitle>
-                            <DialogDescription className="text-muted-foreground text-[13px]">
-                                Preencha os campos abaixo para registrar ou atualizar a despesa.
-                            </DialogDescription>
-                        </DialogHeader>
-                        <form onSubmit={handleSubmit} className="space-y-4 pt-2">
-                            {/* Row 1: Data | Valor */}
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="grid gap-2">
-                                    <Label htmlFor="data" className={labelClasses}>Data</Label>
-                                    <Input id="data" type="date" value={data} onChange={(e) => setData(e.target.value)} required className={inputClasses} />
+                        <DialogContent className="sm:max-w-[520px] bg-card border-border max-h-[90vh] overflow-y-auto">
+                            <DialogHeader>
+                                <DialogTitle className="text-foreground">{editingId ? "Editar Despesa" : "Registrar Nova Despesa"}</DialogTitle>
+                                <DialogDescription className="text-muted-foreground text-[13px]">
+                                    Preencha os campos abaixo para registrar ou atualizar a despesa.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+                                {/* Row 1: Data | Valor */}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="data" className={labelClasses}>Data</Label>
+                                        <Input id="data" type="date" value={data} onChange={(e) => setData(e.target.value)} required className={inputClasses} />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="valor" className={labelClasses}>Valor (R$)</Label>
+                                        <Input id="valor" type="number" step="0.01" min="0" placeholder="0,00" value={valor} onChange={(e) => setValor(e.target.value)} required className={inputClasses} />
+                                    </div>
                                 </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="valor" className={labelClasses}>Valor (R$)</Label>
-                                    <Input id="valor" type="number" step="0.01" min="0" placeholder="0,00" value={valor} onChange={(e) => setValor(e.target.value)} required className={inputClasses} />
-                                </div>
-                            </div>
 
-                            {/* Row 2: Setor | Tipo de Rateio */}
-                            <div className="grid grid-cols-2 gap-4">
+                                {/* Row 2: Setor | Tipo de Rateio */}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid gap-2">
+                                        <Label className={labelClasses}>Tipo de Rateio</Label>
+                                        <Select value={tipoRateio} onValueChange={setTipoRateio}>
+                                            <SelectTrigger className={inputClasses}>
+                                                <SelectValue placeholder="Selecione..." />
+                                            </SelectTrigger>
+                                            <SelectContent className="bg-card border-border">
+                                                <SelectItem value="nenhum">Nenhum (Específico)</SelectItem>
+                                                <SelectItem value="igual">Igual (50% / 50%)</SelectItem>
+                                                <SelectItem value="percentual">Percentual Personalizado</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    {tipoRateio === "nenhum" ? (
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="centroCusto" className={labelClasses}>Centro de Custo</Label>
+                                            <Select value={centroCusto} onValueChange={setCentroCusto}>
+                                                <SelectTrigger className={inputClasses}>
+                                                    <SelectValue placeholder="Selecione o setor" />
+                                                </SelectTrigger>
+                                                <SelectContent className="bg-card border-border">
+                                                    <SelectItem value="Açougue">Açougue</SelectItem>
+                                                    <SelectItem value="Peixaria">Peixaria</SelectItem>
+                                                    <SelectItem value="Geral / Loja">Geral / Loja</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    ) : (
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="centroCusto" className={labelClasses}>Centro de Custo</Label>
+                                            <Input id="centroCusto" value="Loja (Rateado)" disabled className={inputClasses + " opacity-50"} />
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Rateio percentual */}
+                                {tipoRateio === "percentual" && (
+                                    <div className="grid grid-cols-2 gap-4 bg-muted/30 p-4 rounded-xl border border-border/50">
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="perc1" className={labelClasses}>Açougue (%)</Label>
+                                            <Input id="perc1" type="number" step="0.01" value={percentualAcougue} onChange={(e) => setPercentualAcougue(e.target.value)} required className={inputClasses} />
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="perc2" className={labelClasses}>Peixaria (%)</Label>
+                                            <Input id="perc2" type="number" step="0.01" value={percentualPeixaria} onChange={(e) => setPercentualPeixaria(e.target.value)} required className={inputClasses} />
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Row 3: Plano de Contas */}
                                 <div className="grid gap-2">
-                                    <Label className={labelClasses}>Tipo de Rateio</Label>
-                                    <Select value={tipoRateio} onValueChange={setTipoRateio}>
+                                    <div className="flex justify-between items-center">
+                                        <Label htmlFor="planoContas" className={labelClasses}>Plano de Contas</Label>
+                                        {role === 'diretor' && (
+                                            <Button type="button" variant="ghost" className="h-5 p-0 px-2 text-[11px] text-primary hover:text-primary/80" onClick={() => setIsPlanoModalOpen(true)}>
+                                                + Novo Plano
+                                            </Button>
+                                        )}
+                                    </div>
+                                    <Select value={planoContas} onValueChange={setPlanoContas}>
                                         <SelectTrigger className={inputClasses}>
                                             <SelectValue placeholder="Selecione..." />
                                         </SelectTrigger>
                                         <SelectContent className="bg-card border-border">
-                                            <SelectItem value="nenhum">Nenhum (Específico)</SelectItem>
-                                            <SelectItem value="igual">Igual (50% / 50%)</SelectItem>
-                                            <SelectItem value="percentual">Percentual Personalizado</SelectItem>
+                                            {planosContasOpts.map((p) => (
+                                                <SelectItem key={p.id} value={p.nome}>{p.nome}</SelectItem>
+                                            ))}
                                         </SelectContent>
                                     </Select>
                                 </div>
-                                {tipoRateio === "nenhum" ? (
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="centroCusto" className={labelClasses}>Centro de Custo</Label>
-                                        <Select value={centroCusto} onValueChange={setCentroCusto}>
-                                            <SelectTrigger className={inputClasses}>
-                                                <SelectValue placeholder="Selecione o setor" />
-                                            </SelectTrigger>
-                                            <SelectContent className="bg-card border-border">
-                                                <SelectItem value="Açougue">Açougue</SelectItem>
-                                                <SelectItem value="Peixaria">Peixaria</SelectItem>
-                                                <SelectItem value="Geral/Loja">Geral / Loja</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                ) : (
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="centroCusto" className={labelClasses}>Centro de Custo</Label>
-                                        <Input id="centroCusto" value="Loja (Rateado)" disabled className={inputClasses + " opacity-50"} />
-                                    </div>
-                                )}
-                            </div>
 
-                            {/* Rateio percentual */}
-                            {tipoRateio === "percentual" && (
-                                <div className="grid grid-cols-2 gap-4 bg-muted/30 p-4 rounded-xl border border-border/50">
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="perc1" className={labelClasses}>Açougue (%)</Label>
-                                        <Input id="perc1" type="number" step="0.01" value={percentualAcougue} onChange={(e) => setPercentualAcougue(e.target.value)} required className={inputClasses} />
+                                {/* Row 4: Categoria */}
+                                <div className="grid gap-2">
+                                    <div className="flex justify-between items-center">
+                                        <Label htmlFor="categoria" className={labelClasses}>Categoria</Label>
+                                        {role === 'diretor' && (
+                                            <Button type="button" variant="ghost" className="h-5 p-0 px-2 text-[11px] text-primary hover:text-primary/80" onClick={() => setIsCatModalOpen(true)}>
+                                                + Nova Categoria
+                                            </Button>
+                                        )}
                                     </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="perc2" className={labelClasses}>Peixaria (%)</Label>
-                                        <Input id="perc2" type="number" step="0.01" value={percentualPeixaria} onChange={(e) => setPercentualPeixaria(e.target.value)} required className={inputClasses} />
-                                    </div>
+                                    <Select value={categoria} onValueChange={setCategoria}>
+                                        <SelectTrigger className={inputClasses}>
+                                            <SelectValue placeholder="Selecione..." />
+                                        </SelectTrigger>
+                                        <SelectContent className="bg-card border-border">
+                                            {categoriasOpts.map((c) => (
+                                                <SelectItem key={c.id} value={c.nome}>{c.nome}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
-                            )}
 
-                            {/* Row 3: Plano de Contas */}
-                            <div className="grid gap-2">
-                                <div className="flex justify-between items-center">
-                                    <Label htmlFor="planoContas" className={labelClasses}>Plano de Contas</Label>
-                                    {role === 'diretor' && (
-                                        <Button type="button" variant="ghost" className="h-5 p-0 px-2 text-[11px] text-primary hover:text-primary/80" onClick={() => setIsPlanoModalOpen(true)}>
-                                            + Novo Plano
-                                        </Button>
-                                    )}
+                                {/* Row 5: Descrição */}
+                                <div className="grid gap-2">
+                                    <Label htmlFor="descricao" className={labelClasses}>Descrição</Label>
+                                    <Input id="descricao" placeholder="Ex: Conta de luz" value={descricao} onChange={(e) => setDescricao(e.target.value)} required className={inputClasses} />
                                 </div>
-                                <Select value={planoContas} onValueChange={setPlanoContas}>
-                                    <SelectTrigger className={inputClasses}>
-                                        <SelectValue placeholder="Selecione..." />
-                                    </SelectTrigger>
-                                    <SelectContent className="bg-card border-border">
-                                        {planosContasOpts.map((p) => (
-                                            <SelectItem key={p.id} value={p.nome}>{p.nome}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
 
-                            {/* Row 4: Categoria */}
-                            <div className="grid gap-2">
-                                <div className="flex justify-between items-center">
-                                    <Label htmlFor="categoria" className={labelClasses}>Categoria</Label>
-                                    {role === 'diretor' && (
-                                        <Button type="button" variant="ghost" className="h-5 p-0 px-2 text-[11px] text-primary hover:text-primary/80" onClick={() => setIsCatModalOpen(true)}>
-                                            + Nova Categoria
-                                        </Button>
-                                    )}
+                                {/* Row 6: Observação */}
+                                <div className="grid gap-2">
+                                    <Label htmlFor="observacao" className={labelClasses}>Observação (Opcional)</Label>
+                                    <Textarea id="observacao" placeholder="Detalhes adicionais" value={observacao} onChange={(e) => setObservacao(e.target.value)} className={inputClasses + " min-h-[80px] resize-none"} />
                                 </div>
-                                <Select value={categoria} onValueChange={setCategoria}>
-                                    <SelectTrigger className={inputClasses}>
-                                        <SelectValue placeholder="Selecione..." />
-                                    </SelectTrigger>
-                                    <SelectContent className="bg-card border-border">
-                                        {categoriasOpts.map((c) => (
-                                            <SelectItem key={c.id} value={c.nome}>{c.nome}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
 
-                            {/* Row 5: Descrição */}
-                            <div className="grid gap-2">
-                                <Label htmlFor="descricao" className={labelClasses}>Descrição</Label>
-                                <Input id="descricao" placeholder="Ex: Conta de luz" value={descricao} onChange={(e) => setDescricao(e.target.value)} required className={inputClasses} />
-                            </div>
-
-                            {/* Row 6: Observação */}
-                            <div className="grid gap-2">
-                                <Label htmlFor="observacao" className={labelClasses}>Observação (Opcional)</Label>
-                                <Textarea id="observacao" placeholder="Detalhes adicionais" value={observacao} onChange={(e) => setObservacao(e.target.value)} className={inputClasses + " min-h-[80px] resize-none"} />
-                            </div>
-
-                            <div className="pt-4 flex justify-end gap-2">
-                                <Button type="button" variant="ghost" onClick={() => handleCloseModal(false)} className="text-muted-foreground hover:text-foreground">
-                                    Cancelar
-                                </Button>
-                                <Button type="submit" disabled={isSubmitting} className="text-black font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
-                                    {isSubmitting ? "Salvando..." : "Salvar Despesa"}
-                                </Button>
-                            </div>
-                        </form>
-                    </DialogContent>
-                </Dialog>
+                                <div className="pt-4 flex justify-end gap-2">
+                                    <Button type="button" variant="ghost" onClick={() => handleCloseModal(false)} className="text-muted-foreground hover:text-foreground">
+                                        Cancelar
+                                    </Button>
+                                    <Button type="submit" disabled={isSubmitting} className="text-black font-bold bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
+                                        {isSubmitting ? "Salvando..." : "Salvar Despesa"}
+                                    </Button>
+                                </div>
+                            </form>
+                        </DialogContent>
+                    </Dialog>
                 </div>
 
                 {/* Secondary Modals */}
@@ -767,15 +1000,173 @@ export default function DespesasPage() {
                 </Dialog>
             </div>
 
-            {/* Summary badges */}
-            <div className="flex items-center gap-3">
-                <div className="bg-danger/10 text-danger rounded-full px-4 py-1.5 text-[13px] font-semibold">
-                    Total: {formatCurrency(totalValue)}
+            {/* Summary badges + Actions */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-3">
+                    <div className="bg-danger/10 text-danger rounded-full px-4 py-1.5 text-[13px] font-semibold">
+                        Total: {formatCurrency(totalValue)}
+                    </div>
+                    <div className="bg-muted/50 text-muted-foreground rounded-full px-4 py-1.5 text-[13px]">
+                        {filtered.length} registro{filtered.length !== 1 ? 's' : ''}
+                    </div>
                 </div>
-                <div className="bg-muted/50 text-muted-foreground rounded-full px-4 py-1.5 text-[13px]">
-                    {filtered.length} registro{filtered.length !== 1 ? 's' : ''}
+                <div className="flex items-center gap-2">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowFilters(!showFilters)}
+                        className={`gap-2 text-[13px] ${hasActiveFilters ? 'border-primary/50 text-primary' : 'text-muted-foreground'}`}
+                    >
+                        <Filter className="w-3.5 h-3.5" />
+                        Filtros
+                        {hasActiveFilters && (
+                            <span className="bg-primary text-primary-foreground rounded-full w-5 h-5 text-[10px] font-bold flex items-center justify-center">
+                                {[filterDataInicio, filterDataFim, filterPlano, filterCategoria].filter(Boolean).length}
+                            </span>
+                        )}
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleExportPDF}
+                        disabled={filtered.length === 0}
+                        className="gap-2 text-[13px] text-muted-foreground disabled:opacity-40"
+                    >
+                        <FileDown className="w-3.5 h-3.5" />
+                        Exportar PDF
+                    </Button>
                 </div>
             </div>
+
+            {/* Advanced Filters Bar */}
+            {showFilters && (
+                <div className="glass-card rounded-xl p-4 border border-border animate-in slide-in-from-top-2 duration-300">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                        <div className="grid gap-1.5">
+                            <Label className={labelClasses}>Data Início</Label>
+                            <Input
+                                type="date"
+                                value={filterDataInicio}
+                                onChange={(e) => { setFilterDataInicio(e.target.value); setPage(1); }}
+                                className={`${inputClasses} h-9 text-[13px]`}
+                            />
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label className={labelClasses}>Data Fim</Label>
+                            <Input
+                                type="date"
+                                value={filterDataFim}
+                                onChange={(e) => { setFilterDataFim(e.target.value); setPage(1); }}
+                                className={`${inputClasses} h-9 text-[13px]`}
+                            />
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label className={labelClasses}>Centro de Custo</Label>
+                            <Select value={filterCentroCusto} onValueChange={(v) => { setFilterCentroCusto(v === '__all__' ? '' : v); setPage(1); }}>
+                                <SelectTrigger className={`${inputClasses} h-9 text-[13px]`}>
+                                    <SelectValue placeholder="Todos" />
+                                </SelectTrigger>
+                                <SelectContent className="bg-card border-border">
+                                    <SelectItem value="__all__">Todos</SelectItem>
+                                    <SelectItem value="Açougue">Açougue</SelectItem>
+                                    <SelectItem value="Peixaria">Peixaria</SelectItem>
+                                    <SelectItem value="Geral / Loja">Geral / Loja</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label className={labelClasses}>Plano de Contas</Label>
+                            <Select value={filterPlano} onValueChange={(v) => { setFilterPlano(v === '__all__' ? '' : v); setPage(1); }}>
+                                <SelectTrigger className={`${inputClasses} h-9 text-[13px]`}>
+                                    <SelectValue placeholder="Todos" />
+                                </SelectTrigger>
+                                <SelectContent className="bg-card border-border">
+                                    <SelectItem value="__all__">Todos</SelectItem>
+                                    {planosContasOpts.map(p => (
+                                        <SelectItem key={p.id} value={p.nome}>{p.nome}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="grid gap-1.5">
+                            <Label className={labelClasses}>Categoria</Label>
+                            <Select value={filterCategoria} onValueChange={(v) => { setFilterCategoria(v === '__all__' ? '' : v); setPage(1); }}>
+                                <SelectTrigger className={`${inputClasses} h-9 text-[13px]`}>
+                                    <SelectValue placeholder="Todas" />
+                                </SelectTrigger>
+                                <SelectContent className="bg-card border-border">
+                                    <SelectItem value="__all__">Todas</SelectItem>
+                                    {categoriasOpts.map(c => (
+                                        <SelectItem key={c.id} value={c.nome}>{c.nome}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+                    {hasActiveFilters && (
+                        <div className="flex justify-end mt-3">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={clearFilters}
+                                className="gap-1.5 text-[12px] text-muted-foreground hover:text-danger"
+                            >
+                                <X className="w-3.5 h-3.5" />
+                                Limpar Filtros
+                            </Button>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Active Removable Tags (UX Pro Max) */}
+            {hasActiveFilters && !showFilters && (
+                <div className="flex flex-wrap items-center gap-2 mb-4 animate-in fade-in duration-300">
+                    <span className="text-[12px] text-muted-foreground mr-1">Filtros ativos:</span>
+
+                    {(filterDataInicio || filterDataFim) && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-[12px] font-medium">
+                            <span className="max-w-[150px] truncate">
+                                Período: {filterDataInicio ? format(new Date(filterDataInicio + 'T12:00:00'), 'dd/MM/yyyy') : '...'} a {filterDataFim ? format(new Date(filterDataFim + 'T12:00:00'), 'dd/MM/yyyy') : '...'}
+                            </span>
+                            <button onClick={() => { setFilterDataInicio(''); setFilterDataFim(''); setPage(1); }} className="hover:text-foreground">
+                                <X className="w-3 h-3" />
+                            </button>
+                        </span>
+                    )}
+
+                    {filterCentroCusto && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-[12px] font-medium">
+                            <span className="max-w-[150px] truncate">C.Custo: {filterCentroCusto}</span>
+                            <button onClick={() => { setFilterCentroCusto(''); setPage(1); }} className="hover:text-foreground">
+                                <X className="w-3 h-3" />
+                            </button>
+                        </span>
+                    )}
+
+                    {filterPlano && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-[12px] font-medium">
+                            <span className="max-w-[150px] truncate">P.Contas: {filterPlano}</span>
+                            <button onClick={() => { setFilterPlano(''); setPage(1); }} className="hover:text-foreground">
+                                <X className="w-3 h-3" />
+                            </button>
+                        </span>
+                    )}
+
+                    {filterCategoria && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-[12px] font-medium">
+                            <span className="max-w-[150px] truncate">Cat: {filterCategoria}</span>
+                            <button onClick={() => { setFilterCategoria(''); setPage(1); }} className="hover:text-foreground">
+                                <X className="w-3 h-3" />
+                            </button>
+                        </span>
+                    )}
+
+                    <Button variant="ghost" size="sm" onClick={clearFilters} className="h-6 text-[11px] text-muted-foreground hover:text-danger px-2 py-0 ml-1">
+                        Limpar todos
+                    </Button>
+                </div>
+            )}
 
             <Card>
                 <CardHeader>
